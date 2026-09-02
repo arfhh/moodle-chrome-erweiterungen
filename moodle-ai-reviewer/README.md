@@ -2,7 +2,7 @@
 
 **Findet Schülerantworten, die inhaltlich richtig sind, aber von Moodle mit 0 Punkten bewertet wurden.**
 
-Version 1.5.3 · Schwester-Erweiterung zum *Moodle AI Grader* · Lizenz: CC BY-SA 4.0
+Version 1.5.4 · Schwester-Erweiterung zum *Moodle AI Grader* · Lizenz: CC BY-SA 4.0
 
 > Der **Grader** bewertet Freitext. Der **Reviewer** sieht nach, was der Automat bei
 > frei eingetippten Antworten übersehen hat — in Cloze-Lücken wie in Kurzantwort-Fragen.
@@ -370,11 +370,18 @@ mitgeschickt — genauso, wie es beim manuellen Speichern der Fall ist.
 
 ---
 
-*Moodle AI Reviewer – Version 1.5.3 · Entwickelt von A. Spielhoff · CC BY-SA 4.0*
+*Moodle AI Reviewer – Version 1.5.4 · Entwickelt von A. Spielhoff · CC BY-SA 4.0*
 
 ---
 
 ## Änderungen
+
+**1.5.4**
+
+- Behoben: Chrome verweigerte das Laden mit „Invalid value for
+  `web_accessible_resources[0]`. Invalid match pattern." In diesem Manifest-Abschnitt
+  erlaubt Chrome nur Muster mit dem Pfad `/*`; der Seitenfilter des Content Scripts
+  darf dort nicht stehen. Er wirkt ohnehin an der Stelle, an die er gehört.
 
 **1.5.3**
 

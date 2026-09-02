@@ -1,4 +1,4 @@
-# Moodle Cloze Autofill — Version 2.0.3
+# Moodle Cloze Autofill — Version 2.0.4
 
 Trägt neue Antwortvarianten in die Cloze-Lücken der Moodle-Fragensammlung ein,
 statt sie Frage für Frage von Hand nachzupflegen.
@@ -240,6 +240,13 @@ Aufruf mit `node test-cloze-autofill.js`. Stand: 56 Prüfungen, alle bestanden.
 
 ## Änderungen
 
+### 2.0.4 — 02.09.2026
+
+* Behoben: Chrome verweigerte das Laden mit „Invalid value for
+  `web_accessible_resources[0]`. Invalid match pattern." In diesem Manifest-Abschnitt
+  erlaubt Chrome nur Muster mit dem Pfad `/*`; der Seitenfilter des Content Scripts
+  darf dort nicht stehen. Er wirkt ohnehin an der Stelle, an die er gehört.
+
 ### 2.0.3 — 01.09.2026
 
 * Der Panel-Knopf auf der Moodle-Seite zeigt das echte Symbol statt des Puzzleteils 🧩.
@@ -381,4 +388,4 @@ Aufruf mit `node test-cloze-autofill.js`. Stand: 56 Prüfungen, alle bestanden.
 
 ---
 
-*Moodle Cloze Autofill 2.0.3 — CC BY-SA 4.0*
+*Moodle Cloze Autofill 2.0.4 — CC BY-SA 4.0*

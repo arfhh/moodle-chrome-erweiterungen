@@ -1,4 +1,4 @@
-/* Moodle AI Reviewer v1.5.3
+/* Moodle AI Reviewer v1.5.4
  *
  * Schritt 1 (Ernten, nur lesend): sammelt aus der Manuellen Bewertung alle
  *   Antworten ein, die Moodle als "incorrect" bewertet hat, obwohl der

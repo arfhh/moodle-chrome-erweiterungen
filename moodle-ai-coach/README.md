@@ -3,7 +3,7 @@
 Bewertet **kurze Freitextantworten** (ein bis drei Sätze) in Moodles Manueller
 Bewertung — Punkte **und** Sprachfeedback.
 
-Version 0.97 · vierte Erweiterung neben *Moodle AI Grader*, *Moodle AI Reviewer* und
+Version 0.97.1 · vierte Erweiterung neben *Moodle AI Grader*, *Moodle AI Reviewer* und
 *Notenstufen Autofill* · Lizenz: CC BY-SA 4.0 · A. Spielhoff
 
 ---
@@ -195,7 +195,7 @@ Am 28.08.2026 lesend am Hamburg-LMS verifiziert:
 Ein Trockenlauf mit genau dieser Logik ergab an einer echten Frage: 36 Felder,
 `sesskey` dabei, `cancel` nicht dabei, keine `undefined`-Werte, POST ≈ 3,9 KB.
 
-## Stand 0.97
+## Stand 0.97.1
 
 Der Bewertungsweg ist **einmal vollständig mit echten Daten gelaufen** (28.08.2026,
 Test „🕐 4.1 Kurztest Sicherheit", 78 Antworten auf 11 Freitextfragen): Auslesen,
@@ -205,6 +205,11 @@ Bewertungen** — der Beleg dafür, dass der Erwartungshorizont in der Frage fun
 
 **Fehlerfreie Antworten bekommen keinen Kommentar** (Entscheidung 28.08.2026). Der
 Eintrag geht trotzdem ins JSON, damit die Punkte gesetzt werden — nur ohne `text`.
+
+**0.97.1** — Behoben: Chrome verweigerte das Laden mit „Invalid value for
+  `web_accessible_resources[0]`. Invalid match pattern." In diesem Manifest-Abschnitt
+  erlaubt Chrome nur Muster mit dem Pfad `/*`; der Seitenfilter des Content Scripts
+  darf dort nicht stehen. Er wirkt ohnehin an der Stelle, an die er gehört.
 
 **0.97** — **Zuständigkeits-Marker** (siehe „Wer ist zuständig"): Fragen mit
 `[moodle-ai-grader]` werden übersprungen, Fragen ohne Marker gemeldet und auf Knopfdruck

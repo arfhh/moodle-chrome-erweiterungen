@@ -1,4 +1,4 @@
-/* Moodle Cloze Autofill v2.0.3
+/* Moodle Cloze Autofill v2.0.4
  *
  * Sitzt auf der Kategorieansicht der Fragensammlung (question/edit.php).
  *
