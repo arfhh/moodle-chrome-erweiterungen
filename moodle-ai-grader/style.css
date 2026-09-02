@@ -1,0 +1,390 @@
+/* ── TOGGLE BUTTON ── */
+#mag-toggle-btn {
+    position: fixed;
+    top: 80px;
+    right: 20px;
+    background: #0062ca;
+    color: white;
+    border: none;
+    border-radius: 50%;
+    width: 60px;
+    height: 60px;
+    padding: 0;
+    overflow: hidden;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 28px;
+    cursor: pointer;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+    z-index: 999998;
+    transition: transform 0.2s;
+}
+#mag-toggle-btn:hover { transform: scale(1.05); }
+#mag-toggle-btn .mag-toggle-icon {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    display: block;
+}
+
+/* ── HAUPT-PANEL ── */
+#moodle-ai-grader-panel {
+    position: fixed;
+    top: 150px;
+    right: 20px;
+    width: 420px;
+    max-height: 82vh;
+    overflow-y: auto;
+    background: #f4f6f8;
+    border: 2px solid #0f6cbf;
+    border-radius: 10px;
+    box-shadow: 0 10px 30px rgba(0,0,0,0.2);
+    z-index: 999999;
+    font-family: Arial, sans-serif;
+    color: #333;
+    display: none;
+}
+
+/* ── HEADER ── */
+#moodle-ai-grader-panel header {
+    background: #0f6cbf;
+    color: white;
+    padding: 12px 15px;
+    font-weight: bold;
+    font-size: 14px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    position: sticky;
+    top: 0;
+    z-index: 10;
+    border-radius: 8px 8px 0 0;
+}
+
+.mag-icon-btn {
+    background: none;
+    border: none;
+    color: white;
+    cursor: pointer;
+    font-size: 17px;
+    padding: 2px 4px;
+    border-radius: 4px;
+    transition: background 0.15s;
+}
+.mag-icon-btn:hover { background: rgba(255,255,255,0.2); }
+
+/* ── TABS ── */
+.mag-tabs {
+    display: flex;
+    background: #e8edf2;
+    border-bottom: 2px solid #0f6cbf;
+    position: sticky;
+    top: 46px;
+    z-index: 9;
+}
+
+.mag-tab {
+    flex: 1;
+    padding: 9px 6px;
+    font-size: 12px;
+    font-weight: bold;
+    text-align: center;
+    cursor: pointer;
+    background: none;
+    border: none;
+    color: #666;
+    border-bottom: 3px solid transparent;
+    margin-bottom: -2px;
+    transition: color 0.15s, border-color 0.15s, background 0.15s;
+}
+.mag-tab:hover { background: #dde4eb; }
+.mag-tab-active {
+    color: #0f6cbf;
+    border-bottom: 3px solid #0f6cbf;
+    background: #f4f6f8;
+}
+/* Tab-spezifische Farben */
+.mag-tab[data-tab="horizont"]:hover { color: #0f6cbf; }
+.mag-tab[data-tab="horizont"].mag-tab-active {
+    color: #0f6cbf;
+    border-bottom-color: #0f6cbf;
+    background: #eaf3fb;
+}
+.mag-tab[data-tab="korrektur"]:hover { color: #28a745; }
+.mag-tab[data-tab="korrektur"].mag-tab-active {
+    color: #28a745;
+    border-bottom-color: #28a745;
+    background: #eaf6ee;
+}
+
+/* ── TAB CONTENT ── */
+.mag-tab-content { padding: 0; }
+.mag-content { padding: 14px; }
+
+/* ── SCHRITT-BLÖCKE ── */
+.mag-step {
+    background: white;
+    border: 1px solid #dde3ea;
+    border-radius: 8px;
+    padding: 12px 14px;
+    margin-bottom: 10px;
+}
+
+.mag-step-header {
+    display: flex;
+    align-items: center;
+    font-weight: bold;
+    font-size: 13px;
+    color: #1a1a2e;
+    margin-bottom: 6px;
+}
+
+.mag-step-num {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 22px;
+    height: 22px;
+    border-radius: 50%;
+    background: #0f6cbf;
+    color: white;
+    font-size: 11px;
+    font-weight: bold;
+    margin-right: 8px;
+    flex-shrink: 0;
+}
+#mag-tab-korrektur .mag-step-num { background: #28a745; }
+#mag-tab-korrektur .mag-step { border-color: #c3e6cb; }
+#mag-tab-korrektur .mag-btn-success { background: #218838; }
+
+.mag-step-desc {
+    font-size: 12px;
+    color: #666;
+    margin: 0 0 10px 30px;
+    line-height: 1.4;
+}
+
+.mag-step textarea {
+    width: 100%;
+    padding: 7px;
+    border: 1px solid #ccc;
+    border-radius: 5px;
+    box-sizing: border-box;
+    font-size: 12px;
+    resize: vertical;
+    font-family: Arial, sans-serif;
+}
+
+/* ── BUTTONS ── */
+.mag-btn {
+    width: 100%;
+    padding: 9px 12px;
+    border: none;
+    border-radius: 5px;
+    cursor: pointer;
+    font-weight: bold;
+    font-size: 13px;
+    margin-bottom: 0;
+    transition: opacity 0.15s;
+}
+.mag-btn:hover     { opacity: 0.88; }
+.mag-btn-primary   { background: #0f6cbf; color: white; }
+.mag-btn-success   { background: #28a745; color: white; }
+.mag-btn-secondary { background: #6c757d; color: white; }
+.mag-btn-outline   { background: transparent; border: 2px solid #0f6cbf; color: #0f6cbf; }
+
+.mag-flex-row { display: flex; gap: 8px; }
+.mag-flex-row .mag-btn { flex: 1; }
+
+/* ── STATUS ── */
+.mag-status {
+    font-size: 12px;
+    text-align: center;
+    margin-top: 7px;
+    display: none;
+    font-weight: bold;
+}
+
+/* ── SETTINGS PANEL ── */
+#mag-settings-panel,
+#mag-advanced-panel {
+    background: white;
+    border-top: 1px solid #dde3ea;
+}
+
+.mag-settings-title {
+    font-weight: bold;
+    font-size: 14px;
+    color: #0f6cbf;
+    margin-bottom: 12px;
+}
+
+.mag-group {
+    margin-bottom: 10px;
+    background: #f8f9fa;
+    padding: 9px 11px;
+    border-radius: 6px;
+    border: 1px solid #e0e4ea;
+}
+.mag-group label {
+    display: block;
+    font-size: 11px;
+    font-weight: bold;
+    color: #444;
+    margin-bottom: 5px;
+    text-transform: uppercase;
+    letter-spacing: 0.4px;
+}
+.mag-group label.mag-checkbox-label {
+    text-transform: none;
+    letter-spacing: 0;
+    font-weight: normal;
+    font-size: 13px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 6px;
+    cursor: pointer;
+}
+.mag-group select,
+.mag-group input[type="text"] {
+    width: 100%;
+    padding: 6px 8px;
+    border: 1px solid #ccc;
+    border-radius: 4px;
+    box-sizing: border-box;
+    font-size: 13px;
+}
+
+.mag-hint {
+    font-size: 11px;
+    color: #0f6cbf;
+    margin-top: 5px;
+    font-style: italic;
+}
+
+/* ── WARNING MODAL ── */
+#mag-warning-modal {
+    position: fixed;
+    inset: 0;
+    background: rgba(0,0,0,0.55);
+    z-index: 1000002;
+    display: none;
+    align-items: center;
+    justify-content: center;
+}
+#mag-warning-box {
+    background: white;
+    border-radius: 10px;
+    width: 400px;
+    max-width: 95vw;
+    padding: 28px 24px 20px;
+    box-shadow: 0 16px 40px rgba(0,0,0,0.3);
+    font-family: Arial, sans-serif;
+    text-align: center;
+}
+.mag-warning-icon { font-size: 40px; margin-bottom: 8px; }
+.mag-warning-title {
+    font-size: 16px;
+    font-weight: bold;
+    color: #c0392b;
+    margin: 0 0 10px;
+}
+.mag-warning-text {
+    font-size: 13px;
+    color: #555;
+    line-height: 1.5;
+    margin: 0 0 20px;
+}
+.mag-warning-buttons {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+/* ── REVIEW OVERLAY ── */
+#mag-review-overlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(0,0,0,0.55);
+    z-index: 1000001;
+    display: none;
+    align-items: center;
+    justify-content: center;
+}
+#mag-review-box {
+    background: white;
+    border-radius: 10px;
+    width: 98vw;
+    max-width: 1400px;
+    height: 95vh;
+    max-height: 95vh;
+    overflow-y: auto;
+    box-shadow: 0 16px 40px rgba(0,0,0,0.3);
+    font-family: Arial, sans-serif;
+    display: flex;
+    flex-direction: column;
+}
+#mag-review-box header {
+    background: #0f6cbf;
+    color: white;
+    padding: 14px 20px;
+    border-radius: 10px 10px 0 0;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    font-weight: bold;
+    font-size: 15px;
+}
+.mag-review-body { padding: 20px; flex: 1; }
+.rev-block {
+    background: #f8f9fa;
+    border: 1px solid #ddd;
+    border-radius: 6px;
+    padding: 10px 14px;
+    margin-bottom: 12px;
+    font-size: 13px;
+}
+.rev-block strong {
+    color: #0f6cbf;
+    display: block;
+    margin-bottom: 4px;
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+.rev-reasoning-box {
+    background: #fff3cd;
+    border: 1px solid #ffe69c;
+    border-radius: 6px;
+    padding: 10px 14px;
+    margin-bottom: 12px;
+    font-size: 13px;
+    color: #856404;
+}
+.rev-reasoning-box strong {
+    display: block;
+    margin-bottom: 4px;
+    font-size: 11px;
+    text-transform: uppercase;
+}
+.mag-review-footer {
+    padding: 14px 20px;
+    border-top: 1px solid #ddd;
+    display: flex;
+    gap: 10px;
+    background: #f8f9fa;
+    border-radius: 0 0 10px 10px;
+}
+.mag-review-footer .mag-btn { margin: 0; flex: 1; }
+
+/* Zustaendigkeit: Coach oder Grader (ab 2.30) */
+#moodle-ai-grader-panel .mag-zust {
+    margin: 0; padding: 8px 12px;
+    font-size: 12px; line-height: 1.45;
+    border-bottom: 1px solid #e5e7eb;
+}
+#moodle-ai-grader-panel .mag-zust-warn { background: #fef3c7; color: #78350f; }
+#moodle-ai-grader-panel .mag-zust-ok   { background: #ecfdf5; color: #065f46; }
+#moodle-ai-grader-panel .mag-zust-info { background: #eff6ff; color: #1e3a5f; }

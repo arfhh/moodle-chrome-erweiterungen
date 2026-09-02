@@ -1,0 +1,499 @@
+/* Moodle Cloze-Fehlerernte v0.1 — Teal, damit es sich vom Moodle AI Grader unterscheidet */
+
+.ce-hidden { display: none !important; }
+
+.ce-fab {
+  position: fixed;
+  top: 150px;
+  right: 20px;
+  z-index: 99998;
+  width: 46px;
+  height: 46px;
+  border: none;
+  border-radius: 50%;
+  background: #0f766e;
+  color: #fff;
+  font-size: 20px;
+  line-height: 46px;
+  cursor: pointer;
+  box-shadow: 0 2px 10px rgba(0, 0, 0, .3);
+}
+.ce-fab:hover { background: #115e59; }
+.ce-fab { padding: 0; overflow: hidden; display: flex; align-items: center; justify-content: center; }
+.ce-fab .ce-fab-icon { width: 100%; height: 100%; object-fit: cover; display: block; }
+
+.ce-panel {
+  position: fixed;
+  top: 150px;
+  right: 76px;
+  z-index: 99999;
+  width: 400px;
+  max-height: calc(100vh - 180px);
+  display: flex;
+  flex-direction: column;
+  background: #fff;
+  border: 1px solid #cbd5e1;
+  border-radius: 10px;
+  box-shadow: 0 6px 24px rgba(0, 0, 0, .22);
+  font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+  font-size: 14px;
+  color: #1e293b;
+}
+
+.ce-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 14px;
+  background: #0f766e;
+  color: #fff;
+  border-radius: 9px 9px 0 0;
+}
+.ce-title { font-weight: 600; }
+.ce-close {
+  background: none; border: none; color: #fff;
+  font-size: 16px; cursor: pointer; line-height: 1;
+}
+
+.ce-body { padding: 14px; overflow-y: auto; }
+
+.ce-meta {
+  margin: 0 0 10px;
+  font-size: 12px;
+  color: #64748b;
+}
+
+.ce-label {
+  display: block;
+  font-size: 12px;
+  color: #475569;
+  margin-bottom: 12px;
+}
+.ce-klasse {
+  display: block;
+  width: 100%;
+  margin-top: 4px;
+  padding: 6px 8px;
+  border: 1px solid #cbd5e1;
+  border-radius: 6px;
+  font-size: 14px;
+  box-sizing: border-box;
+}
+
+.ce-go, .ce-copy {
+  width: 100%;
+  padding: 9px 12px;
+  border: none;
+  border-radius: 6px;
+  background: #0f766e;
+  color: #fff;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.ce-go:hover, .ce-copy:hover { background: #115e59; }
+.ce-go:disabled { background: #94a3b8; cursor: default; }
+
+.ce-progress {
+  margin-top: 12px;
+  height: 20px;
+  position: relative;
+  background: #e2e8f0;
+  border-radius: 10px;
+  overflow: hidden;
+}
+.ce-bar {
+  height: 100%;
+  width: 0;
+  background: #0f766e;
+  transition: width .15s linear;
+}
+.ce-ptext {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 11px;
+  color: #0f172a;
+}
+
+.ce-result { margin-top: 14px; }
+.ce-summary {
+  margin: 0 0 10px;
+  font-weight: 600;
+}
+
+.ce-list { margin-top: 12px; }
+
+.ce-qname {
+  margin: 12px 0 4px;
+  font-size: 12px;
+  font-weight: 600;
+  color: #0f766e;
+  border-bottom: 1px solid #e2e8f0;
+  padding-bottom: 2px;
+  word-break: break-word;
+}
+
+.ce-row {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 3px 0;
+  font-size: 13px;
+}
+.ce-gap {
+  flex: 0 0 auto;
+  background: #ccfbf1;
+  color: #0f766e;
+  border-radius: 4px;
+  padding: 1px 5px;
+  font-size: 11px;
+  font-weight: 600;
+}
+.ce-ans { flex: 1 1 auto; word-break: break-word; }
+.ce-pts { flex: 0 0 auto; color: #64748b; font-size: 12px; }
+
+.ce-error {
+  margin-top: 12px;
+  padding: 8px 10px;
+  background: #fef2f2;
+  border: 1px solid #fecaca;
+  border-radius: 6px;
+  color: #991b1b;
+  font-size: 13px;
+}
+
+.ce-fallback { position: fixed; left: -9999px; top: 0; }
+
+/* ---------- v0.2: Tabs und Eintragen ---------- */
+
+.ce-tabs {
+  display: flex;
+  border-bottom: 1px solid #e2e8f0;
+  background: #f8fafc;
+}
+.ce-tab {
+  flex: 1;
+  padding: 9px 6px;
+  border: none;
+  background: none;
+  font-size: 13px;
+  color: #64748b;
+  cursor: pointer;
+  border-bottom: 2px solid transparent;
+}
+.ce-tab.ce-aktiv {
+  color: #0f766e;
+  font-weight: 600;
+  border-bottom-color: #0f766e;
+}
+
+.ce-hinweis {
+  margin: 0 0 10px;
+  font-size: 12px;
+  color: #64748b;
+  line-height: 1.4;
+}
+
+.ce-json {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 8px;
+  border: 1px solid #cbd5e1;
+  border-radius: 6px;
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: 11px;
+  resize: vertical;
+  margin-bottom: 10px;
+}
+
+.ce-pruef, .ce-probe, .ce-alle {
+  width: 100%;
+  padding: 9px 12px;
+  border: none;
+  border-radius: 6px;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.ce-pruef { background: #0f766e; color: #fff; }
+.ce-pruef:hover { background: #115e59; }
+.ce-probe { background: #fff; color: #0f766e; border: 1px solid #0f766e; margin-bottom: 8px; }
+.ce-probe:hover { background: #f0fdfa; }
+.ce-alle { background: #b45309; color: #fff; }
+.ce-alle:hover { background: #92400e; }
+.ce-probe:disabled, .ce-alle:disabled { opacity: .5; cursor: default; }
+
+.ce-schreibknoepfe { margin-top: 12px; }
+
+.ce-pinfo {
+  margin: 10px 0 0;
+  padding: 8px 10px;
+  border-radius: 6px;
+  font-size: 13px;
+}
+.ce-pinfo.ce-ok {
+  background: #f0fdfa;
+  border: 1px solid #99f6e4;
+  color: #115e59;
+}
+
+.ce-progress2 {
+  margin-top: 12px;
+  height: 20px;
+  position: relative;
+  background: #e2e8f0;
+  border-radius: 10px;
+  overflow: hidden;
+}
+.ce-bar2 { height: 100%; width: 0; background: #b45309; transition: width .15s linear; }
+.ce-ptext2 {
+  position: absolute; inset: 0;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 11px; color: #0f172a;
+}
+
+.ce-log {
+  margin-top: 12px;
+  max-height: 240px;
+  overflow-y: auto;
+  border: 1px solid #e2e8f0;
+  border-radius: 6px;
+  padding: 8px;
+  font-size: 12px;
+  background: #f8fafc;
+}
+.ce-logkopf {
+  font-weight: 600;
+  margin-bottom: 6px;
+  padding-bottom: 6px;
+  border-bottom: 1px solid #e2e8f0;
+}
+.ce-logzeile { padding: 2px 0; word-break: break-word; }
+.ce-logfehler { color: #991b1b; }
+
+.ce-pinfo:not(.ce-ok):not(.ce-error) {
+  background: #f1f5f9;
+  border: 1px solid #cbd5e1;
+  color: #334155;
+}
+
+.ce-check {
+  display: flex;
+  align-items: flex-start;
+  gap: 7px;
+  font-size: 12px;
+  color: #475569;
+  margin-bottom: 10px;
+  cursor: pointer;
+  line-height: 1.35;
+}
+.ce-check input { margin-top: 1px; flex: 0 0 auto; }
+
+.ce-schwelle {
+  display: block;
+  width: 80px;
+  margin-top: 4px;
+  padding: 5px 8px;
+  border: 1px solid #cbd5e1;
+  border-radius: 6px;
+  font-size: 13px;
+}
+
+/* ---- ab v0.7: Einstellungen, zweiter Kopierknopf, Größenhinweis ---- */
+
+.ce-zweit {
+  display: block;
+  width: 100%;
+  margin-top: 8px;
+  padding: 8px 12px;
+  border: 1px solid #0f766e;
+  border-radius: 6px;
+  background: #fff;
+  color: #0f766e;
+  font-size: 13px;
+  cursor: pointer;
+}
+.ce-zweit:hover { background: #f0fdfa; }
+
+.ce-groesse {
+  margin: 8px 0 0;
+  font-size: 12px;
+  color: #64748b;
+  line-height: 1.4;
+}
+
+.ce-prompt {
+  width: 100%;
+  box-sizing: border-box;
+  margin-top: 4px;
+  padding: 8px;
+  border: 1px solid #cbd5e1;
+  border-radius: 6px;
+  font-family: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+  font-size: 11px;
+  line-height: 1.45;
+  resize: vertical;
+}
+
+.ce-optsave {
+  display: block;
+  width: 100%;
+  margin-top: 12px;
+  padding: 9px 12px;
+  border: none;
+  border-radius: 6px;
+  background: #0f766e;
+  color: #fff;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.ce-optsave:hover { background: #115e59; }
+
+.ce-optinfo {
+  margin: 8px 0 0;
+  font-size: 12px;
+  color: #0f766e;
+}
+
+.ce-hinweis code {
+  padding: 1px 4px;
+  border-radius: 3px;
+  background: #f1f5f9;
+  font-size: 11px;
+}
+
+.ce-rechnung {
+  margin-top: 8px;
+  padding: 8px 10px;
+  border-radius: 6px;
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  max-height: 160px;
+  overflow-y: auto;
+  font-size: 11px;
+  line-height: 1.5;
+  color: #475569;
+}
+
+/* ---- ab v1.0: Fundnummer und Verlinkung zum Versuch ---- */
+
+a.ce-row {
+  text-decoration: none;
+  color: inherit;
+  border-radius: 4px;
+}
+a.ce-row:hover {
+  background: #f0fdfa;
+  outline: 1px solid #99f6e4;
+}
+
+.ce-nr {
+  flex: 0 0 auto;
+  min-width: 26px;
+  color: #94a3b8;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+
+/* ---- ab v1.3 ---- */
+
+.ce-kivorschau {
+  margin: -4px 0 12px;
+  padding: 6px 8px;
+  border-left: 3px solid #99f6e4;
+  background: #f0fdfa;
+  font-size: 11px;
+  line-height: 1.4;
+  color: #475569;
+}
+
+.ce-abschluss {
+  margin-top: 12px;
+  padding: 9px 11px;
+  border-radius: 6px;
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.4;
+}
+.ce-abok    { background: #ecfdf5; border: 1px solid #6ee7b7; color: #065f46; }
+.ce-abfehler{ background: #fef2f2; border: 1px solid #fca5a5; color: #991b1b; }
+
+a.ce-logzeile { display: block; color: inherit; text-decoration: none; }
+a.ce-logzeile:hover { text-decoration: underline; }
+
+.ce-vorschauzeile {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 0 8px;
+  padding: 4px 0;
+  border-bottom: 1px solid #eef2f6;
+}
+.ce-vorschauzeile:last-child { border-bottom: none; }
+.ce-vfrage { font-weight: 600; color: #334155; }
+.ce-vpkt   { font-variant-numeric: tabular-nums; color: #0f766e; font-weight: 600; }
+.ce-vans   { color: #475569; }
+.ce-vproz  { color: #94a3b8; text-align: right; }
+
+/* Ein Textarea ist von Haus aus inline und stellt sich sonst NEBEN den
+   Beschriftungstext, statt darunter. */
+.ce-label > textarea,
+.ce-kitext {
+  display: block;
+  width: 100%;
+  box-sizing: border-box;
+  margin-top: 4px;
+  padding: 8px;
+  border: 1px solid #cbd5e1;
+  border-radius: 6px;
+  font-family: inherit;
+  font-size: 12px;
+  line-height: 1.45;
+  color: #1e293b;
+  resize: vertical;
+}
+/* Der Prompt bleibt bewusst dicktengleich — dort zaehlt die Struktur. */
+.ce-label > textarea.ce-prompt {
+  font-family: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+  font-size: 11px;
+}
+
+.ce-fehlend {
+  margin-top: 10px;
+  padding: 9px 11px;
+  border-radius: 6px;
+  background: #fffbeb;
+  border: 1px solid #fcd34d;
+  font-size: 12px;
+  color: #78350f;
+}
+.ce-fehlendkopf { font-weight: 600; margin-bottom: 5px; }
+.ce-fehlend a.ce-logzeile { color: #78350f; }
+.ce-nachfordern {
+  display: block;
+  width: 100%;
+  margin-top: 8px;
+  padding: 7px 10px;
+  border: 1px solid #d97706;
+  border-radius: 6px;
+  background: #fff;
+  color: #92400e;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.ce-nachfordern:hover { background: #fef3c7; }
+
+.ce-schwelleinfo {
+  margin: -6px 0 12px;
+  padding: 6px 8px;
+  border-left: 3px solid #99f6e4;
+  background: #f0fdfa;
+  font-size: 11px;
+  line-height: 1.4;
+  color: #475569;
+}

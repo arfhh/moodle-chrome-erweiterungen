@@ -1,0 +1,42 @@
+{
+  "manifest_version": 3,
+  "name": "Moodle AI Coach",
+  "version": "0.97",
+  "description": "Bewertet kurze Freitextantworten (2-3 Sätze) in Moodles Manueller Bewertung: liest den Erwartungshorizont aus der Frage, baut daraus einen Bewertungs-Prompt, trägt Punkte und Sprachfeedback zurück. Fehlt der Horizont, erzeugt der Coach den Prompt zum Erstellen und schreibt ihn in die Frage.",
+  "icons": {
+    "16": "icons/icon16.png",
+    "32": "icons/icon32.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  },
+  "permissions": [
+    "storage"
+  ],
+  "content_scripts": [
+    {
+      "matches": [
+        "*://*/*mod/quiz/report.php*"
+      ],
+      "js": [
+        "content.js"
+      ],
+      "css": [
+        "style.css"
+      ],
+      "run_at": "document_idle"
+    }
+  ],
+  "web_accessible_resources": [
+    {
+      "resources": [
+        "icons/icon16.png",
+        "icons/icon32.png",
+        "icons/icon48.png",
+        "icons/icon128.png"
+      ],
+      "matches": [
+        "*://*/*mod/quiz/report.php*"
+      ]
+    }
+  ]
+}

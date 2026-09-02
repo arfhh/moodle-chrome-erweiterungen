@@ -1,0 +1,112 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="UTF-8">
+<title>Notenstufen-Einstellungen</title>
+<style>
+  body {
+    font-family: -apple-system, "Segoe UI", Arial, sans-serif;
+    width: 340px;
+    padding: 14px;
+    margin: 0;
+  }
+  h1 {
+    font-size: 15px;
+    margin: 0 0 4px 0;
+  }
+  p.hinweis {
+    font-size: 12px;
+    color: #555;
+    margin: 0 0 12px 0;
+  }
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    margin-bottom: 12px;
+  }
+  th {
+    font-size: 11px;
+    text-align: left;
+    color: #666;
+    padding-bottom: 4px;
+  }
+  td {
+    padding: 2px 4px 2px 0;
+  }
+  input {
+    width: 100%;
+    box-sizing: border-box;
+    padding: 4px 6px;
+    font-size: 13px;
+    border: 1px solid #ccc;
+    border-radius: 4px;
+  }
+  .note-label {
+    font-size: 12px;
+    white-space: nowrap;
+    padding-right: 6px;
+  }
+  .buttons {
+    display: flex;
+    gap: 8px;
+    margin-bottom: 8px;
+  }
+  button {
+    flex: 1;
+    padding: 8px;
+    font-size: 13px;
+    border: none;
+    border-radius: 6px;
+    cursor: pointer;
+  }
+  .preset-btn {
+    background: #e5e5e5;
+    color: #333;
+  }
+  #speichern {
+    background: #2f7a3d;
+    color: #fff;
+    font-weight: bold;
+  }
+  #schliessen {
+    background: #f0f0f0;
+    color: #555;
+    border: 1px solid #ccc;
+  }
+  #status {
+    text-align: center;
+    font-size: 12px;
+    margin-top: 4px;
+    height: 14px;
+    color: #2f7a3d;
+  }
+</style>
+</head>
+<body>
+  <h1>Notenstufen-Einstellungen</h1>
+  <p class="hinweis">Diese Werte werden nur bei dir lokal gespeichert und beim automatischen Ausfüllen verwendet.</p>
+
+  <table>
+    <thead>
+      <tr>
+        <th style="width:60px;">Note</th>
+        <th>Buchstabe</th>
+        <th>Prozent ≥</th>
+      </tr>
+    </thead>
+    <tbody id="tabelle"></tbody>
+  </table>
+
+  <div class="buttons">
+    <button id="preset-gymnasium" class="preset-btn">Gymnasium-Standard</button>
+    <button id="preset-stadtteilschule" class="preset-btn">Stadtteilschule-Standard</button>
+  </div>
+  <div class="buttons">
+    <button id="speichern">Speichern</button>
+    <button id="schliessen">Schließen</button>
+  </div>
+  <div id="status"></div>
+
+  <script src="popup.js"></script>
+</body>
+</html>

@@ -1,0 +1,1482 @@
+/* Moodle AI Coach — Bewertung kurzer Freitextantworten.
+ *
+ * Arbeitsteilung der drei Erweiterungen (Stand 28.08.2026):
+ *   Grader   blau,   top  80px, Einzelfrageseite   — EINE Freitextaufgabe mit Teilaufgaben
+ *   Reviewer petrol, top 150px, Übersicht + includeauto=1 — Cloze-Nachbewertung
+ *   Coach    violett,top 220px, Übersicht ohne includeauto — kurze Freitextantworten
+ *
+ * Der Coach erscheint nur auf der ÜBERSICHT (mode=grading ohne slot=), weil dort
+ * weder Grader noch Reviewer ein Panel einblenden. Belegt in coach-dom-fakten.
+ *
+ * Grundprinzip „Horizont zuerst": Der Erwartungshorizont steht im Moodle-Feld
+ * graderinfo an der Frage selbst. Ist er da, wird sofort der Bewertungs-Prompt
+ * gebaut. Fehlt er, führt Reiter 3 durch das Erstellen und schreibt ihn hinein.
+ *
+ * A. Spielhoff · CC BY-SA 4.0
+ */
+(function () {
+  'use strict';
+
+  const P = new URLSearchParams(location.search);
+  if (P.get('mode') !== 'grading') return;
+  if (P.get('slot')) return;                 // Einzelfrageseite gehört dem Grader
+  const CMID = P.get('id');
+  if (!CMID) return;
+  const BASE = location.origin + location.pathname;
+
+  // Wurzel der Moodle-Installation aus der eigenen Adresse ableiten.
+  // Nicht jedes Moodle liegt auf der Domainwurzel: https://schule.de/moodle/... ist
+  // genauso gueltig wie https://lms.example/... . location.origin allein zeigte in
+  // solchen Installationen auf /question/... statt auf /moodle/question/... .
+  const MOODLE_ROOT = (() => {
+    const p = location.pathname;
+    for (const m of ['/mod/', '/question/', '/grade/', '/course/', '/admin/', '/report/', '/user/']) {
+      const i = p.indexOf(m);
+      if (i > -1) return location.origin + p.slice(0, i);
+    }
+    return location.origin;
+  })();
+
+  /* ================= Helfer ================= */
+
+  const num = (s) => {
+    const v = parseFloat(String(s == null ? '' : s).replace(',', '.'));
+    return isNaN(v) ? null : v;
+  };
+  const komma = (v) => Number(v).toFixed(2).replace('.', ',');
+  const prozentText = (v) => String(Number(v)).replace('.', ',');
+  const escapeHtml = (t) => String(t)
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+
+  const el = (tag, cls, txt) => {
+    const e = document.createElement(tag);
+    if (cls) e.className = cls;
+    if (txt != null) e.textContent = txt;
+    return e;
+  };
+
+  async function fetchDoc(url) {
+    const r = await fetch(url, { credentials: 'same-origin' });
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    return new DOMParser().parseFromString(await r.text(), 'text/html');
+  }
+
+  // grade=needsgrading fürs Auslesen (Essays sind nie autobewertet),
+  // grade=all fürs Eintragen und Gegenprüfen — ein bewerteter Versuch
+  // verlässt needsgrading sofort.
+  const seiteUrl = (slot, qid, filter) =>
+    `${BASE}?id=${CMID}&mode=grading&slot=${slot}&qid=${qid}` +
+    `&grade=${filter || 'needsgrading'}&qperpage=100`;
+
+  const fragenUrl = (qid) =>
+    `${MOODLE_ROOT}/question/bank/editquestion/question.php?id=${qid}&cmid=${CMID}`;
+
+  const versuchLink = (e) => (e && e.slot && e.qid)
+    ? seiteUrl(e.slot, e.qid, 'all') + (e.qubaid ? '#question-' + e.qubaid + '-' + e.slot : '')
+    : null;
+
+  async function inZwischenablage(text) {
+    try { await navigator.clipboard.writeText(text); }
+    catch (e) {
+      const ta = el('textarea', 'co-fallback'); ta.value = text;
+      document.body.appendChild(ta); ta.select(); document.execCommand('copy'); ta.remove();
+    }
+  }
+
+  /* ================= Zustaendigkeit: wem gehoert die Frage? ================= */
+
+  // In einem Test koennen Freitextfragen fuer den Coach (2-3 Saetze) und fuer den
+  // Grader (laengere Antworten) nebeneinander liegen. Ohne Kennzeichnung wuerde der
+  // Coach beide bewerten. Deshalb traegt der Erwartungshorizont in der ERSTEN Zeile
+  // einen Marker, z. B. „[moodle-ai-coach]". Er steht in der Frage selbst, gilt also
+  // dauerhaft und in jedem Test — anders als eine Auswahl, die man je Durchlauf neu
+  // setzen muesste. Der Coach liest den Horizont ohnehin; der Marker kostet nichts.
+  const MARKER_ZEILE = '[moodle-ai-coach]';
+  // Toleriert auch die Fassung ohne Klammern, mit Leer- statt Bindestrich und mit
+  // nachfolgendem Text in derselben Zeile.
+  const MARKER_RE = /^\s*[\[(]?\s*moodle[-\s]?ai[-\s]?(coach|grader)\s*[\])]?\s*[:.–-]?\s*/i;
+
+  function ersteZeile(h) {
+    return String(h || '').split('\n').map((z) => z.trim()).find(Boolean) || '';
+  }
+
+  // 'coach' | 'grader' | null (kein Marker oder gar kein Horizont)
+  function zustaendigkeit(horizont) {
+    const m = ersteZeile(horizont).match(MARKER_RE);
+    return m ? m[1].toLowerCase() : null;
+  }
+
+  // Der Marker ist Verwaltung, kein Bewertungsmassstab — er gehoert nicht in den
+  // Prompt. Deshalb wird er aus dem Horizont entfernt, bevor er an die KI geht.
+  function horizontOhneMarker(h) {
+    const zeilen = String(h || '').split('\n');
+    const i = zeilen.findIndex((z) => z.trim());
+    if (i > -1 && MARKER_RE.test(zeilen[i])) {
+      zeilen[i] = zeilen[i].replace(MARKER_RE, '').trim();
+      if (!zeilen[i]) zeilen.splice(i, 1);
+    }
+    return zeilen.join('\n').trim();
+  }
+
+  /* ================= Einstellungen ================= */
+
+  const KI_HINWEIS_STANDARD =
+    'Dieses Feedback wurde von der Lehrkraft mithilfe von KI-Unterstützung erstellt und geprüft.';
+
+  const OPT_STANDARD = {
+    // Sprache wird ABGEZOGEN, nicht als zweiter Topf addiert: sonst bekäme eine
+    // inhaltsleere Antwort allein für sauberes Deutsch schon 30 %.
+    maxSprachabzug: 30,
+    kiHinweisText: KI_HINWEIS_STANDARD,
+    promptOverride: '',
+    horizontPromptOverride: '',
+    // Streng: nur Fragen bewerten, deren Horizont ausdruecklich „[moodle-ai-coach]"
+    // sagt. Standardmaessig aus, sonst wuerde der Coach auf einem noch nicht
+    // markierten Bestand gar nichts mehr bewerten.
+    nurMitMarker: false
+  };
+  let optionen = { ...OPT_STANDARD };
+
+  function optionenLaden() {
+    return new Promise((resolve) => {
+      try {
+        chrome.storage.local.get(['coachOptionen'], (r) => {
+          optionen = { ...OPT_STANDARD, ...(r && r.coachOptionen ? r.coachOptionen : {}) };
+          resolve(optionen);
+        });
+      } catch (e) { resolve(optionen); }
+    });
+  }
+  function optionenSpeichern(neu) {
+    optionen = { ...optionen, ...neu };
+    return new Promise((resolve) => {
+      try { chrome.storage.local.set({ coachOptionen: optionen }, resolve); }
+      catch (e) { resolve(); }
+    });
+  }
+
+  /* ================= Sprachabzug ================= */
+
+  // Anteile vom eingestellten Höchstabzug. Bewusst bis 5 Fehler gestaffelt:
+  // bei einer Leiter bis 3 landen fast alle Antworten sofort am Anschlag und
+  // die Bewertung sagt nichts mehr aus.
+  const LEITER = [0, 1 / 3, 1 / 2, 2 / 3, 5 / 6, 1];
+
+  function abzugProzent(fehlerzahl) {
+    const i = Math.min(Math.max(0, Math.round(fehlerzahl)), LEITER.length - 1);
+    return LEITER[i] * (optionen.maxSprachabzug ?? OPT_STANDARD.maxSprachabzug);
+  }
+
+  // Schwere Fehler zählen doppelt — ein Satz ohne Prädikat wiegt mehr als ein
+  // vergessenes Komma. Das ist der „strenge Deutschlehrer".
+  const fehlerGewicht = (liste) =>
+    (liste || []).reduce((s, f) => s + (f && f.schwer ? 2 : 1), 0);
+
+  function punkteRechnen(max, inhaltProzent, fehlerListe) {
+    const gewicht = fehlerGewicht(fehlerListe);
+    const ab = abzugProzent(gewicht);
+    const roh = max * inhaltProzent / 100 - max * ab / 100;
+    return {
+      gewicht, abzug: ab,
+      inhaltPunkte: Math.round(max * inhaltProzent / 100 * 100) / 100,
+      punkte: Math.max(0, Math.round(roh * 100) / 100)
+    };
+  }
+
+  /* ================= Auslesen ================= */
+
+  // Die Übersichtstabelle listet je Pool-Frage eine Zeile mit gleichbleibender
+  // Slot-Nummer. Genau diese Paare laufen wir ab.
+  function uebersichtsZeilen() {
+    const t = document.querySelector('table');
+    if (!t) return [];
+    return [...t.querySelectorAll('tbody tr')].map((tr) => {
+      const href = [...tr.querySelectorAll('a')]
+        .map((a) => a.getAttribute('href') || '').find((h) => /slot=/.test(h)) || '';
+      const slot = (href.match(/slot=(\d+)/) || [])[1];
+      const qid = (href.match(/qid=(\d+)/) || [])[1];
+      if (!slot || !qid) return null;
+      return { slot, qid, name: (tr.cells[2] ? tr.cells[2].textContent.trim() : '') };
+    }).filter(Boolean);
+  }
+
+  const txt = (n) => {
+    if (!n) return '';
+    return n.innerHTML
+      .replace(/<[^>]+>/g, ' ')
+      .replace(/&nbsp;/g, ' ').replace(/&amp;/g, '&')
+      .replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"')
+      .replace(/\s+/g, ' ').trim();
+  };
+
+  function werteSeiteAus(doc, zeile) {
+    const bloecke = [...doc.querySelectorAll('.que')];
+    if (!bloecke.length) return null;
+    // Nur Essay-Fragen: die Antwort steht in einem readonly-Textarea mit dieser
+    // Klasse. Cloze- und Kurzantwortfragen haben sie nicht.
+    if (!bloecke.some((q) => q.querySelector('textarea.qtype_essay_response'))) return null;
+
+    const erste = bloecke[0];
+    const gi = erste.querySelector('.graderinfo');
+    const horizontRoh = gi ? gi.innerText.trim() : '';
+    const frage = {
+      name: zeile.name, qid: zeile.qid, slot: zeile.slot,
+      aufgabe: txt(erste.querySelector('.qtext')),
+      zustaendig: zustaendigkeit(horizontRoh),
+      horizont: horizontOhneMarker(horizontRoh),
+      max: num((erste.querySelector('input[name$="-maxmark"]') || {}).value) ?? 1
+    };
+
+    const versuche = [];
+    bloecke.forEach((q) => {
+      const m = (q.id || '').match(/^question-(\d+)-(\d+)$/);
+      if (!m) return;
+      const antwortFeld = q.querySelector('textarea.qtype_essay_response');
+      const mark = q.querySelector('input[name$="-mark"]');
+      const komm = q.querySelector('textarea[name$="-comment"]');
+      if (!antwortFeld || !mark) return;
+      // Leeres Punktefeld = noch nicht bewertet. Der Zustandstext taugt nicht:
+      // er sagt auch bei unbewerteten Essays „Vollständig".
+      const schonBewertet = String(mark.value || '').trim() !== '';
+      versuche.push({
+        frage: zeile.name, qid: zeile.qid, slot: zeile.slot, qubaid: m[1],
+        antwort: (antwortFeld.value || '').trim(),
+        max: num((q.querySelector('input[name$="-maxmark"]') || {}).value) ?? frage.max,
+        markfeld: mark.name,
+        kommentarfeld: komm ? komm.name : null,
+        hat_kommentar: !!(komm && komm.value.trim()),
+        schon_bewertet: schonBewertet
+      });
+    });
+    return { frage, versuche };
+  }
+
+  async function ernten(onProgress, mitBereits) {
+    const zeilen = uebersichtsZeilen();
+    if (!zeilen.length) throw new Error('Auf dieser Seite steht keine Fragenübersicht.');
+
+    const fragen = {}, fremde = {}, antworten = [], fehler = [];
+    let fertig = 0, uebersprungen = 0, ohneHorizont = 0, keinEssay = 0;
+    let fuerGrader = 0, ohneMarker = 0, strengUebersprungen = 0;
+    const warteschlange = [...zeilen];
+
+    await Promise.all(Array.from({ length: 4 }, async () => {
+      while (warteschlange.length) {
+        const z = warteschlange.shift();
+        try {
+          const doc = await fetchDoc(seiteUrl(z.slot, z.qid, 'all'));
+          const res = werteSeiteAus(doc, z);
+          if (!res) { keinEssay++; }
+          else {
+            const schluessel = res.frage.name || (z.slot + '|' + z.qid);
+            const zust = res.frage.zustaendig;
+            // Fremd ist eine Frage, die ausdruecklich dem Grader gehoert — und im
+            // strengen Modus zusaetzlich jede ohne Coach-Marker.
+            const fuerAnderen = zust === 'grader';
+            const strengRaus = optionen.nurMitMarker && zust !== 'coach';
+            if (fuerAnderen || strengRaus) {
+              if (!fremde[schluessel]) {
+                fremde[schluessel] = {
+                  ...res.frage,
+                  grund: fuerAnderen ? 'grader' : 'kein-marker'
+                };
+                if (fuerAnderen) fuerGrader++; else strengUebersprungen++;
+              }
+            } else {
+              if (!fragen[schluessel]) {
+                fragen[schluessel] = res.frage;
+                if (!res.frage.horizont) ohneHorizont++;
+                else if (!zust) ohneMarker++;
+              }
+              res.versuche.forEach((v) => {
+                if (v.schon_bewertet && !mitBereits) { uebersprungen++; return; }
+                // Leere Antworten kommen MIT: sie bleiben sonst für immer unbewertet.
+                // Die KI gibt dort 0 % Inhalt und schreibt trotzdem eine Rückmeldung.
+                antworten.push(v);
+              });
+            }
+          }
+        } catch (e) {
+          fehler.push({ frage: z.name, meldung: e.message });
+        }
+        fertig++;
+        onProgress(fertig, zeilen.length, antworten.length);
+      }
+    }));
+
+    antworten.forEach((a, i) => { a.nr = i + 1; });
+    return {
+      meta: {
+        test: (document.title || '').replace(/\s*\|.*$/, '').trim(),
+        kurs: (() => {
+          const a = [...document.querySelectorAll('a')]
+            .find((x) => /\/course\/view\.php/.test(x.getAttribute('href') || ''));
+          return a ? a.textContent.trim() : '';
+        })(),
+        cmid: CMID,
+        datum: new Date().toISOString().slice(0, 10),
+        fragen_geprueft: zeilen.length,
+        fragen_mit_horizont: Object.values(fragen).filter((f) => f.horizont).length,
+        fragen_ohne_horizont: ohneHorizont,
+        fragen_fuer_grader: fuerGrader,
+        fragen_ohne_marker: ohneMarker,
+        streng_uebersprungen: strengUebersprungen,
+        nur_mit_marker: !!optionen.nurMitMarker,
+        keine_freitextfrage: keinEssay,
+        antworten: antworten.length,
+        uebersprungen,
+        max_sprachabzug_prozent: optionen.maxSprachabzug
+      },
+      fragen, fremde, antworten, fehler
+    };
+  }
+
+  /* ================= Zurückschreiben: Punkte und Feedback ================= */
+
+  function formularFelder(form) {
+    const p = new URLSearchParams();
+    [...form.elements].forEach((f) => {
+      if (!f.name || f.disabled) return;
+      // form.elements enthält auch FIELDSET-Elemente mit name (Moodle vergibt
+      // z. B. „graderinfoheader"). Die haben kein value und würden als
+      // „undefined" mitgeschickt. Nur echte Eingabefelder übernehmen.
+      if (!['INPUT', 'SELECT', 'TEXTAREA'].includes(f.tagName)) return;
+      if (f.type === 'file' || f.type === 'submit') return;
+      if ((f.type === 'checkbox' || f.type === 'radio') && !f.checked) return;
+      if (f.tagName === 'SELECT') {
+        [...f.selectedOptions].forEach((o) => p.append(f.name, o.value));
+      } else { p.append(f.name, f.value); }
+    });
+    return p;
+  }
+
+  function gruppieren(liste) {
+    const map = new Map();
+    (liste || []).forEach((e) => {
+      const k = e.slot + '|' + e.qid;
+      if (!map.has(k)) map.set(k, { slot: e.slot, qid: e.qid, eintraege: [] });
+      map.get(k).eintraege.push(e);
+    });
+    return [...map.values()];
+  }
+
+  async function trockenlauf(liste, onLog, onProgress) {
+    const gruppen = gruppieren(liste);
+    let ok = 0, fehler = 0, fertig = 0;
+    for (const g of gruppen) {
+      try {
+        const doc = await fetchDoc(seiteUrl(g.slot, g.qid, 'all'));
+        const form = doc.querySelector('form#manualgradingform');
+        if (!form) throw new Error('Bewertungsformular nicht gefunden');
+        const felder = formularFelder(form);
+        g.eintraege.forEach((e) => {
+          const fehlt = [];
+          if (!felder.has(e.markfeld)) fehlt.push('Punktefeld');
+          if (e.text && e.kommentarfeld && !felder.has(e.kommentarfeld)) fehlt.push('Kommentarfeld');
+          if (fehlt.length) {
+            fehler++; onLog(`✗ ${fehlt.join(' und ')} fehlt — ${e.frage}`, versuchLink(e));
+          } else ok++;
+        });
+      } catch (e) {
+        fehler += g.eintraege.length;
+        onLog(`✗ Seite ${g.eintraege[0].frage}: ${e.message}`);
+      }
+      fertig++; onProgress(fertig, gruppen.length);
+    }
+    return { ok, fehler, gruppen: gruppen.length, trocken: true };
+  }
+
+  async function eintragen(liste, kiHinweis, onLog, onProgress) {
+    const gruppen = gruppieren(liste);
+    let ok = 0, fehler = 0, fertig = 0;
+    for (const g of gruppen) {
+      try {
+        const url = seiteUrl(g.slot, g.qid, 'all');
+        const doc = await fetchDoc(url);
+        const form = doc.querySelector('form#manualgradingform');
+        if (!form) throw new Error('Bewertungsformular nicht gefunden');
+        let felder = formularFelder(form);
+        const gesetzt = [];
+        g.eintraege.forEach((e) => {
+          if (!felder.has(e.markfeld)) {
+            fehler++; onLog(`✗ Punktefeld nicht auf der Seite — ${e.frage}`, versuchLink(e));
+            return;
+          }
+          felder.set(e.markfeld, komma(e.punkte));
+          if (e.text && e.kommentarfeld && felder.has(e.kommentarfeld)) {
+            let html = e.text.trim();
+            if (!/<[a-z]/i.test(html)) html = '<p>' + html.replace(/\n+/g, '</p><p>') + '</p>';
+            if (kiHinweis) {
+              const satz = (optionen.kiHinweisText || KI_HINWEIS_STANDARD).trim();
+              if (satz) html += '<p><em><small>' + escapeHtml(satz) + '</small></em></p>';
+            }
+            felder.set(e.kommentarfeld, html);
+          }
+          gesetzt.push(e);
+        });
+        if (gesetzt.length) {
+          const submit = [...form.elements].find((f) => f.type === 'submit' && f.name);
+          if (submit) felder.set(submit.name, submit.value);
+          const action = new URL(form.getAttribute('action') || url, url).href;
+          const antwort = await fetch(action, {
+            method: 'POST', credentials: 'same-origin',
+            headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+            body: felder.toString()
+          });
+          if (!antwort.ok) throw new Error('HTTP ' + antwort.status + ' beim Speichern');
+          const kontrolle = await fetchDoc(url);
+          gesetzt.forEach((e) => {
+            const f = kontrolle.querySelector(`input[name="${CSS.escape(e.markfeld)}"]`);
+            const ist = f ? num(f.value) : null;
+            if (ist !== null && Math.abs(ist - e.punkte) < 0.005) {
+              ok++; onLog(`✓ ${e.frage} — ${komma(e.punkte)} von ${komma(e.max)}`, versuchLink(e));
+            } else {
+              fehler++;
+              onLog(`✗ ${e.frage} — steht auf ${ist == null ? 'keinem Wert' : komma(ist)} `
+                  + `statt ${komma(e.punkte)}`, versuchLink(e));
+            }
+          });
+        }
+      } catch (e) {
+        fehler += g.eintraege.length;
+        onLog(`✗ ${g.eintraege[0].frage}: ${e.message}`);
+      }
+      fertig++; onProgress(fertig, gruppen.length);
+    }
+    return { ok, fehler, gruppen: gruppen.length };
+  }
+
+  /* ================= Zurückschreiben: Erwartungshorizont ================= */
+
+  // Schreibt den Horizont in das Moodle-Feld graderinfo der Frage. Technisch
+  // dasselbe Muster wie beim Punkte-Eintragen: Bearbeiten-Formular vollständig
+  // einsammeln, ein Feld überschreiben, absenden, danach gegenprüfen.
+  // ACHTUNG: Das ändert die Fragensammlung, nicht nur eine Bewertung.
+  // Schreibt den Horizont als reinen Text (wird zu <p>…<br>…</p>). Der
+  // Zustaendigkeits-Marker wird vorangestellt, falls er noch fehlt — so traegt jeder
+  // vom Coach erzeugte Horizont ihn automatisch.
+  function horizontSchreiben(qid, text, nurPruefen) {
+    const mitMarker = MARKER_RE.test(ersteZeile(text)) ? text : MARKER_ZEILE + '\n' + text;
+    return graderinfoSchreiben(
+      qid,
+      () => '<p>' + escapeHtml(mitMarker).replace(/\n/g, '<br>') + '</p>',
+      mitMarker, nurPruefen);
+  }
+
+  // Stellt nur die Markerzeile vor einen VORHANDENEN Horizont. Der bisherige Inhalt
+  // wird unveraendert uebernommen — er ist HTML, und ihn ueber den Textweg neu zu
+  // schreiben wuerde Absaetze und Listen zerstoeren.
+  function markerNachtragen(qid) {
+    return graderinfoSchreiben(
+      qid,
+      (vorher) => '<p>' + MARKER_ZEILE + '</p>' + (vorher || ''),
+      MARKER_ZEILE, false);
+  }
+
+  // `mach(vorherigerFeldwert)` liefert den neuen Feldwert; `pruefText` ist der Text,
+  // an dem die Gegenprobe nach dem Speichern haengt.
+  async function graderinfoSchreiben(qid, mach, pruefText, nurPruefen) {
+    const url = fragenUrl(qid);
+    const doc = await fetchDoc(url);
+    // Die id des Fragenformulars ist pro Aufruf zufällig (mform1_XXXXXXX), und das
+    // erste form[method=post] der Seite ist der Bearbeitungsmodus-Schalter im Kopf.
+    // Verlässlich ist nur: das Formular, das das graderinfo-Feld enthält.
+    const form = [...doc.forms].find((f) => f.querySelector('[name="graderinfo[text]"]'))
+              || [...doc.forms].find((f) => f.querySelector('[name*="graderinfo"]'));
+    if (!form) {
+      throw new Error(doc.querySelector('form#login')
+        ? 'Moodle hat auf die Anmeldeseite umgeleitet — bist du noch angemeldet?'
+        : 'Bearbeiten-Formular nicht gefunden (ist es eine Freitextfrage?)');
+    }
+    const felder = formularFelder(form);
+    const schluessel = 'graderinfo[text]';
+    if (!felder.has(schluessel)) throw new Error('Feld „graderinfo[text]" nicht im Formular');
+    if (nurPruefen) return { ok: true, feld: schluessel, vorher: felder.get(schluessel) || '' };
+
+    felder.set(schluessel, mach(felder.get(schluessel) || ''));
+    // Live belegt (28.08.2026): updatebutton „Speichern und weiter bearbeiten",
+    // submitbutton „Änderungen speichern", cancel „Abbrechen". Wir nehmen
+    // submitbutton — cancel darf auf keinen Fall mitgehen.
+    const submit = [...form.querySelectorAll('input[type=submit],button[type=submit]')]
+      .find((f) => f.name === 'submitbutton')
+      || [...form.querySelectorAll('input[type=submit],button[type=submit]')]
+      .find((f) => f.name && f.name !== 'cancel');
+    if (!submit) throw new Error('Kein Speichern-Knopf im Formular');
+    felder.set(submit.name, submit.value);
+    const action = new URL(form.getAttribute('action') || url, url).href;
+    const antwort = await fetch(action, {
+      method: 'POST', credentials: 'same-origin',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: felder.toString()
+    });
+    if (!antwort.ok) throw new Error('HTTP ' + antwort.status + ' beim Speichern');
+
+    const kontrolle = await fetchDoc(url);
+    const feld = kontrolle.querySelector(`[name="${CSS.escape(schluessel)}"]`);
+    const drin = feld ? String(feld.value || '').replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim() : '';
+    const soll = String(pruefText).replace(/\s+/g, ' ').trim().slice(0, 30);
+    if (!drin || !drin.includes(soll.slice(0, 20))) throw new Error('Text nicht angekommen');
+    return { ok: true, feld: schluessel };
+  }
+
+  /* ================= Prompts ================= */
+
+  const DATEN_PLATZHALTER = '[MOODLE_AI_COACH_DATEN]';
+
+  function bewertungsPromptVorlage() {
+    const maxAb = optionen.maxSprachabzug ?? OPT_STANDARD.maxSprachabzug;
+    return `═══════════════════════════════════════════════════════
+MOODLE AI COACH – BEWERTUNG KURZER FREITEXTANTWORTEN
+═══════════════════════════════════════════════════════
+
+BEGRÜSSUNG
+Beginne mit genau diesen drei Punkten, dann folge den Arbeitsanweisungen:
+1. „Willkommen beim Moodle AI Coach."
+2. „Ich bewerte kurze Freitextantworten nach dem Erwartungshorizont, der in der
+   Aufgabe hinterlegt ist, und schreibe jedem Schüler eine Rückmeldung zur Sprache.
+   Entscheiden tust du."
+3. „Der „Moodle AI Coach" wurde von A. Spielhoff entwickelt und ist unter der Lizenz
+   CC BY-SA 4.0 veröffentlicht – du darfst ihn frei verwenden, teilen und anpassen,
+   solange du ihn nennst."
+
+═══════════════════════════════════════════════════════
+AUSGANGSLAGE
+═══════════════════════════════════════════════════════
+
+Die Schülerinnen und Schüler haben eine Frage in ein bis drei Sätzen beantwortet.
+Zu jeder Aufgabe steht unter „horizont" der Erwartungshorizont der Lehrkraft: die
+Kernaussage, was enthalten sein muss, was auch als richtig gilt und – am wichtigsten –
+eine Abstufung, welcher Prozentsatz wofür vergeben wird.
+
+Deine Aufgabe hat zwei Teile, die STRIKT getrennt bleiben:
+  1. INHALT  – wie gut trifft die Antwort den Erwartungshorizont?
+  2. SPRACHE – welche Sprachfehler stehen im Text?
+
+═══════════════════════════════════════════════════════
+TEIL 1 – INHALT
+═══════════════════════════════════════════════════════
+
+Vergib einen Prozentwert nach der Abstufung, die im Horizont unter „Inhalt:" steht.
+Halte dich an diese Stufen. Erfinde keine Zwischenwerte und keine eigene Skala –
+die Lehrkraft hat für diese Aufgabe bereits entschieden.
+
+Steht im Horizont ausnahmsweise keine Abstufung, benutze 100 / 75 / 50 / 25 / 0.
+
+Grundregeln:
+• Bewerte nur, was tatsächlich dasteht. Interpretiere nichts hinein.
+• „Auch richtig" im Horizont ist verbindlich: Wer eine dort genannte Formulierung
+  benutzt, bekommt die volle Stufe – auch umgangssprachlich.
+• Fachlich richtige Zusätze, die nicht verlangt waren, geben keine Punkte, kosten
+  aber auch keine.
+• Eine Antwort in Stichworten statt in Sätzen ist inhaltlich nicht schlechter.
+  Der Satzbau wird in Teil 2 bewertet, nicht hier.
+
+═══════════════════════════════════════════════════════
+TEIL 2 – SPRACHE
+═══════════════════════════════════════════════════════
+
+Du zählst die Fehler. Den Abzug rechnet die Erweiterung daraus selbst aus –
+schreibe nirgends einen Abzug oder eine Punktzahl hin.
+
+Zähle als Fehler, was eine strenge Deutschlehrkraft anstreichen würde:
+
+SCHWER (zählt doppelt):
+  • Satz ohne Prädikat oder abgebrochener Satz
+  • Satzbau so falsch, dass man den Satz zweimal lesen muss
+
+NORMAL (zählt einfach):
+  • falscher Fall oder falscher Numerus („die Atome verbindet sich")
+  • falsche Zeitform
+  • Nomen kleingeschrieben oder Verb großgeschrieben
+  • Fachbegriff falsch geschrieben
+  • sonstiger Rechtschreibfehler
+  • fehlender Punkt am Satzende oder fehlendes Komma vor dem Nebensatz
+  • Umgangssprache statt Fachsprache („das Zeug", „macht kaputt")
+
+Zählregeln:
+• Derselbe Fehler im selben Wort zählt nur einmal, auch wenn das Wort mehrfach
+  vorkommt.
+• Zähle nur, was du benennen kannst. Ein Bauchgefühl ist kein Fehler.
+• Eine leere Antwort hat keine Sprachfehler – dort ist der Inhalt 0 %.
+
+Zur Einordnung, was mit deiner Zählung geschieht: Der Höchstabzug ist gerade auf
+${maxAb} % der Aufgabenpunkte eingestellt. 1 Fehler kostet ein Drittel davon,
+2 Fehler die Hälfte, 3 zwei Drittel, 4 fünf Sechstel, ab 5 den vollen Abzug.
+
+═══════════════════════════════════════════════════════
+TEIL 3 – RÜCKMELDUNG
+═══════════════════════════════════════════════════════
+
+Das Feedback ist das eigentliche Produkt. Es geht an Schülerinnen und Schüler, die
+sich mit dem Schreiben schwertun. Deshalb:
+
+• Beginne mit „Du hast …" und bleib sachlich.
+• ZITIERE den fehlerhaften Satz wörtlich und schreibe ihn richtig daneben.
+  Nicht: „Achte auf den Satzbau."
+  Sondern: Du hast geschrieben: „…" – besser: „…"
+• Höchstens zwei solcher Korrekturen, sonst wird es erdrückend.
+• Danach ein Satz zum Inhalt: was fehlte oder was falsch war.
+• Zum Schluss eine mögliche richtige Lösung, angelehnt an die Kernaussage.
+• Kein Lob auf Vorrat, keine Floskeln, keine Emojis.
+
+**Ist eine Antwort inhaltlich voll und sprachlich fehlerfrei, schreibst du KEINE
+Rückmeldung.** Lass das Feld „text" bei diesen Einträgen einfach weg. Ein Kommentar
+wie „Du hast „Handschuhe" geschrieben. Das entspricht der erwarteten Antwort." sagt
+niemandem etwas und nennt einem Schüler mit richtiger Antwort die richtige Antwort.
+Die Punktzahl steht ohnehin daneben. Ein leeres Kommentarfeld lenkt die Aufmerksamkeit
+auf die Rückmeldungen, in denen wirklich etwas steht.
+
+═══════════════════════════════════════════════════════
+SCHRITT 1 – TABELLE ZUR PRÜFUNG
+═══════════════════════════════════════════════════════
+
+Gib zuerst alle Antworten aus, nach Frage gruppiert. Je Frage eine Kopfzeile mit der
+Aufgabe und der Kernaussage aus dem Horizont, darunter die Tabelle:
+
+| Nr | Antwort (gekürzt) | Inhalt | Sprachfehler | Begründung |
+|---|---|---|---|---|
+| 1 | „Hefe wandelt Zucker in Alkohol um" | 50 | 1 normal | Prozess nicht benannt |
+
+• „Nr" ist die Zahl aus dem Feld „nr" – nicht deine eigene Zählung.
+• „Sprachfehler": Anzahl und Art, zum Beispiel „2 normal, 1 schwer".
+• „Begründung": ein Halbsatz, der sich auf die Abstufung im Horizont bezieht.
+• Keine Punkte- und keine Abzugsspalte. Das rechnet die Erweiterung.
+
+Halte danach an und schreibe:
+„Passt das so? Nenne mir die Nummern, die ich ändern soll, zum Beispiel: 3 auf 75.
+Wenn alles stimmt, antworte mit ok – dann gebe ich dir das JSON aus."
+
+═══════════════════════════════════════════════════════
+SCHRITT 2 – JSON
+═══════════════════════════════════════════════════════
+
+Erst nach „ok":
+
+\`\`\`json
+{
+  "bewertungen": [
+    { "frage": "alkoholischen Gärung (AFB I)", "qubaid": "2433013", "slot": "6",
+      "inhalt": 50,
+      "fehler": [
+        { "art": "Nomen kleingeschrieben", "stelle": "zucker", "schwer": false }
+      ],
+      "text": "Du hast geschrieben: „…" – besser: „…" Gesucht war …" }
+  ]
+}
+\`\`\`
+
+• Ein Eintrag je Versuch. „qubaid" und „slot" unverändert aus den Daten.
+• „inhalt" ist der Prozentwert aus der Abstufung des Horizonts.
+• „fehler" ist die Liste der gezählten Sprachfehler, leer bei fehlerfreiem Text.
+• „text" ist die Rückmeldung an die Schülerin oder den Schüler. **Bei einer
+  fehlerfreien Volltreffer-Antwort lässt du „text" weg** — der Eintrag steht dann nur
+  mit „inhalt" und leerem „fehler" da, damit die Punkte trotzdem eingetragen werden.
+• Keine Punktzahlen, kein Abzug, keine Feldnamen.
+
+Schreibe darunter: „Kopiere diesen Block in die Erweiterung, Reiter „2 · Eintragen",
+und klicke dort auf „🔍 Prüfen"."
+
+═══════════════════════════════════════════════════════
+DATEN AUS MOODLE
+═══════════════════════════════════════════════════════
+
+- „fragen"    – je Frage: Aufgabentext, Maximalpunkte und der Erwartungshorizont
+                aus dem Moodle-Feld „Bewerterinformation".
+- „antworten" – je Versuch die Schülerantwort mit „nr", „qubaid" und „slot".
+
+${DATEN_PLATZHALTER}`;
+  }
+
+  function horizontPromptVorlage() {
+    return `═══════════════════════════════════════════════════════
+MOODLE AI COACH – ERWARTUNGSHORIZONT ERSTELLEN
+═══════════════════════════════════════════════════════
+
+Zu den unten stehenden Aufgaben fehlt der Erwartungshorizont. Erstelle ihn – einen
+je Aufgabe, in genau dem Format unten. Er wird anschließend in das Moodle-Feld
+„Bewerterinformation" der Frage geschrieben und dort dauerhaft benutzt.
+
+WICHTIG – was NICHT hineingehört:
+Keine Sprachregeln, kein Rechtschreibabzug, kein Feedback-Stil, keine Rolle, keine
+Punktzahl. Das steht global in der Erweiterung. Im Horizont steht ausschließlich,
+was für DIESE eine Aufgabe gilt. Sonst entstehen so viele Kopien der Regeln, wie es
+Fragen gibt, und sie laufen auseinander.
+
+FORMAT je Aufgabe:
+
+Erwartungshorizont
+
+Kernaussage:
+<der eine Satz, der die volle Inhaltspunktzahl trägt>
+
+Muss enthalten:
+- <Teilaspekt 1>
+- <Teilaspekt 2>
+
+Auch richtig:
+<gleichwertige Formulierungen, Synonyme, umgangssprachliche Varianten>
+
+Inhalt:
+100 % – <Bedingung>
+ 75 % – <Bedingung>            (nur wenn die Aufgabe eine solche Stufe hergibt)
+ 50 % – <Bedingung>
+ 25 % – <Bedingung>
+  0 % – <Bedingung>
+
+Reicht nicht:
+<typische halbe Antwort und warum sie nicht reicht>
+
+Häufiger Fehler:
+<typischer Denkfehler – hilft später beim Feedback>
+
+REGELN:
+• Benutze nur die Stufen 100 / 75 / 50 / 25 / 0. Kein 90 – das ist im Projekt die
+  Rechtschreibstufe und hat mit Inhalt nichts zu tun.
+• Lass Stufen weg, die die Aufgabe nicht hergibt. Bei einer Aufzählung von drei
+  Dingen sind 100 / 75 / 50 / 0 natürlicher als fünf Stufen.
+• Die Antwort soll ein bis drei Sätze lang sein. Halte den Horizont entsprechend
+  knapp – er ist kein Lehrbuchtext.
+• „Auch richtig" ist der wichtigste Abschnitt. Denk daran, wie Vierzehnjährige
+  formulieren, und nimm diese Varianten ausdrücklich auf.
+• Der Operator der Aufgabe zählt: Bei „Nenne" reicht die Nennung, bei „Erkläre"
+  muss ein Zusammenhang dastehen, bei „Vergleiche" beide Seiten.
+
+AUSGABE:
+Gib zuerst alle Horizonte als lesbaren Text aus, damit die Lehrkraft sie prüfen kann.
+Frage dann: „Passt das so?"
+Erst nach „ok" gibst du sie als JSON aus:
+
+\`\`\`json
+{
+  "horizonte": [
+    { "qid": "115576570", "frage": "alkoholischen Gärung (AFB I)",
+      "text": "Erwartungshorizont\\n\\nKernaussage:\\n…" }
+  ]
+}
+\`\`\`
+
+„qid" übernimmst du unverändert aus den Daten unten.
+
+═══════════════════════════════════════════════════════
+AUFGABEN OHNE ERWARTUNGSHORIZONT
+═══════════════════════════════════════════════════════
+
+[MOODLE_AI_COACH_AUFGABEN]`;
+  }
+
+  function bauePrompt(daten) {
+    const eigen = (optionen.promptOverride || '').trim();
+    const vorlage = eigen || bewertungsPromptVorlage();
+    const block = '```json\n' + JSON.stringify(daten, null, 1) + '\n```';
+    return vorlage.includes(DATEN_PLATZHALTER)
+      ? vorlage.replace(DATEN_PLATZHALTER, block)
+      : vorlage + '\n\n' + block;
+  }
+
+  function baueHorizontPrompt(fragenListe) {
+    const eigen = (optionen.horizontPromptOverride || '').trim();
+    const vorlage = eigen || horizontPromptVorlage();
+    const block = '```json\n' + JSON.stringify(
+      fragenListe.map((f) => ({ qid: f.qid, frage: f.name, aufgabe: f.aufgabe, max: f.max })),
+      null, 1) + '\n```';
+    const platz = '[MOODLE_AI_COACH_AUFGABEN]';
+    return vorlage.includes(platz) ? vorlage.replace(platz, block) : vorlage + '\n\n' + block;
+  }
+
+  /* ================= Oberfläche ================= */
+
+  // Kein Emoji: das Mörtelbrett rendert als bunter Aufkleber und passt nicht zu
+  // 🔎 und 🪄. „Co" ist einfarbig und steht schlicht für Coach — „Aa" hatte Arne
+  // als verwirrend empfunden, weil es nach Schriftgröße aussieht.
+  // Echtes Logo aus dem icons-Ordner statt des Zeichens „Co". Faellt auf das
+  // Zeichen zurueck, wenn das Bild nicht geladen werden kann (z. B. wenn der Eintrag
+  // web_accessible_resources im Manifest fehlt).
+  const knopf = el('button', 'co-fab');
+  knopf.title = 'Moodle AI Coach';
+  try {
+    const bild = document.createElement('img');
+    bild.src = chrome.runtime.getURL('icons/icon128.png');
+    bild.alt = 'AI Coach';
+    bild.className = 'co-fab-icon';
+    bild.addEventListener('error', () => { bild.remove(); knopf.textContent = 'Co'; });
+    knopf.appendChild(bild);
+  } catch (e) { knopf.textContent = 'Co'; }
+  document.body.appendChild(knopf);
+
+  const panel = el('div', 'co-panel co-hidden');
+  panel.innerHTML = `
+    <div class="co-head">
+      <span class="co-title">Co &nbsp;AI Coach</span>
+      <button class="co-close" title="Schließen">✕</button>
+    </div>
+    <div class="co-tabs">
+      <button class="co-tab co-aktiv" data-tab="lesen">1 · Bewerten</button>
+      <button class="co-tab" data-tab="eintrag">2 · Eintragen</button>
+      <button class="co-tab" data-tab="horizont">3 · Horizont <span class="co-badge co-hidden"></span></button>
+      <button class="co-tab" data-tab="opt">⚙</button>
+    </div>
+
+    <div class="co-body" data-panel="lesen">
+      <p class="co-meta"></p>
+      <label class="co-check"><input type="checkbox" class="co-bereits">
+        Auch schon bewertete Versuche noch einmal vorlegen</label>
+      <button class="co-go">Freitextaufgaben durchsuchen</button>
+      <div class="co-progress co-hidden"><div class="co-bar"></div><span class="co-ptext"></span></div>
+      <div class="co-result co-hidden">
+        <p class="co-summary"></p>
+        <p class="co-warn co-hidden"></p>
+        <div class="co-zust co-hidden"></div>
+        <button class="co-copy">📋 Prompt + Daten kopieren</button>
+        <button class="co-copy2 co-zweit">📋 nur JSON</button>
+        <p class="co-groesse"></p>
+        <div class="co-list"></div>
+      </div>
+      <p class="co-error co-hidden"></p>
+      <details class="co-details">
+        <summary>Bewertungs-Prompt anpassen</summary>
+        <p class="co-hinweis"><strong>Damit bewertet die KI die Schülerantworten.</strong>
+        Hier steht der vollständige Prompt, den „📋 Prompt + Daten kopieren" verschickt —
+        du kannst ihn lesen und ändern. „Standard einfügen" holt die mitgelieferte Fassung
+        zurück. Der Platzhalter <code>[MOODLE_AI_COACH_DATEN]</code> wird beim Kopieren
+        durch die Fragen und Antworten aus Moodle ersetzt.</p>
+        <textarea class="co-prompt" rows="8"></textarea>
+        <button class="co-promptstd co-zweit">Standard einfügen</button>
+        <button class="co-promptsave co-zweit">Prompt speichern</button>
+      </details>
+    </div>
+
+    <div class="co-body co-hidden" data-panel="eintrag">
+      <p class="co-hinweis">Hier das Bewertungs-JSON der KI einfügen. Die Punkte rechnet
+      die Erweiterung aus Inhalt und Fehlerzahl selbst.</p>
+      <textarea class="co-json" rows="6" placeholder='{ "bewertungen": [ … ] }'></textarea>
+      <label class="co-check"><input type="checkbox" class="co-ki" checked>
+        KI-Hinweis ans Feedback anhängen</label>
+      <p class="co-kivorschau"></p>
+      <button class="co-pruef">🔍 Prüfen</button>
+      <p class="co-pinfo co-hidden"></p>
+      <div class="co-schreibknoepfe co-hidden">
+        <button class="co-probe">Trockenlauf — nichts speichern</button>
+        <button class="co-alle">Alle eintragen</button>
+      </div>
+      <div class="co-progress2 co-hidden"><div class="co-bar2"></div><span class="co-ptext2"></span></div>
+      <p class="co-abschluss co-hidden"></p>
+      <div class="co-log co-hidden"></div>
+      <div class="co-vorschau"></div>
+    </div>
+
+    <div class="co-body co-hidden" data-panel="horizont">
+      <p class="co-hinweis">Der Erwartungshorizont gehört in die Frage, nicht in die
+      Erweiterung — einmal erstellt, gilt er dauerhaft und wandert beim Export mit.
+      Dieser Reiter wird nur gebraucht, wenn er irgendwo fehlt.</p>
+      <div class="co-ohneliste"></div>
+      <p class="co-schritt">Schritt 1 — Prompt holen</p>
+      <button class="co-hcopy">📋 Prompt für Erwartungshorizont kopieren</button>
+      <details class="co-details">
+        <summary>Horizont-Prompt anpassen</summary>
+        <p class="co-hinweis"><strong>Damit schreibt die KI den Erwartungshorizont</strong>
+        für Fragen, die noch keinen haben — also das, was später in der Frage steht und
+        wonach der Bewertungs-Prompt dann bewertet. Hier steht der vollständige Prompt,
+        den der Knopf oben kopiert. Der Platzhalter
+        <code>[MOODLE_AI_COACH_AUFGABEN]</code> wird beim Kopieren durch die Aufgaben
+        ohne Horizont ersetzt.</p>
+        <textarea class="co-hprompt" rows="8"></textarea>
+        <button class="co-hpromptstd co-zweit">Standard einfügen</button>
+        <button class="co-hpromptsave co-zweit">Prompt speichern</button>
+      </details>
+      <p class="co-schritt">Schritt 2 — Antwort der KI einfügen</p>
+      <textarea class="co-hjson" rows="5" placeholder='{ "horizonte": [ … ] }'></textarea>
+      <button class="co-hpruef">🔍 Prüfen</button>
+      <p class="co-hinfo co-hidden"></p>
+      <div class="co-hliste"></div>
+      <div class="co-progress3 co-hidden"><div class="co-bar3"></div><span class="co-ptext3"></span></div>
+      <p class="co-habschluss co-hidden"></p>
+      <div class="co-hlog co-hidden"></div>
+      <div class="co-hknoepfe co-hidden">
+        <button class="co-hprobe">Trockenlauf — nichts speichern</button>
+        <button class="co-hschreib">In die Aufgaben eintragen</button>
+      </div>
+    </div>
+
+    <div class="co-body co-hidden" data-panel="opt">
+      <label class="co-label">Maximaler Abzug für Sprache und Ausdruck (% der Aufgabenpunkte)
+        <input type="text" class="co-abzug" value="30">
+      </label>
+      <p class="co-abzuginfo"></p>
+      <label class="co-check"><input type="checkbox" class="co-nurmarker">
+        Nur Fragen bewerten, die „[moodle-ai-coach]" im Erwartungshorizont tragen</label>
+      <p class="co-hinweis">Fragen, deren Horizont mit <code>[moodle-ai-grader]</code>
+      beginnt, überspringt der Coach <strong>immer</strong> — dafür ist dieses Häkchen
+      nicht nötig. Es entscheidet nur über Fragen <em>ohne</em> Marker: aus (Standard)
+      werden sie bewertet und im Ergebnis gemeldet, an bleiben sie liegen. Leg es um,
+      wenn dein Bestand vollständig markiert ist.</p>
+      <label class="co-label">KI-Hinweis unter dem Feedback
+        <textarea class="co-kitext" rows="3"></textarea>
+      </label>
+      <p class="co-hinweis">Die beiden Prompts stehen dort, wo sie gebraucht werden:
+      der <strong>Bewertungs-Prompt</strong> in Reiter 1 (damit bewertet die KI die
+      Antworten), der <strong>Horizont-Prompt</strong> in Reiter 3 (damit schreibt sie
+      den Erwartungshorizont für Fragen, die noch keinen haben) — jeweils unter
+      „Prompt anpassen". In beiden Feldern steht der volle Text zum Lesen und Ändern.</p>
+      <button class="co-optsave">Speichern</button>
+      <button class="co-optreset co-zweit">Alles zurücksetzen</button>
+      <p class="co-optinfo co-hidden"></p>
+    </div>`;
+  document.body.appendChild(panel);
+
+  const $ = (s) => panel.querySelector(s);
+  let ausgabe = null, eintraege = null, horizonte = null;
+
+  // Den Auslese-Durchlauf sichern. Ohne das ist er nach jedem Neuladen der Seite weg
+  // und Reiter 2 kann die Punkte nicht mehr rechnen — man müsste alles neu durchsuchen.
+  const ERNTE_KEY = 'coachErnte_' + CMID;
+  function ernteSichern() {
+    try { chrome.storage.local.set({ [ERNTE_KEY]: ausgabe }); } catch (e) { /* egal */ }
+  }
+  try {
+    chrome.storage.local.get([ERNTE_KEY], (r) => {
+      const d = r && r[ERNTE_KEY];
+      if (d && !ausgabe) {
+        ausgabe = d;
+        const m = $('.co-meta');
+        if (m) m.textContent += ` · ${(d.antworten || []).length} Antworten aus einem `
+                              + 'früheren Durchlauf geladen';
+      }
+    });
+  } catch (e) { /* egal */ }
+
+  knopf.addEventListener('click', () => panel.classList.toggle('co-hidden'));
+  $('.co-close').addEventListener('click', () => panel.classList.add('co-hidden'));
+  panel.querySelectorAll('.co-tab').forEach((t) => {
+    t.addEventListener('click', () => {
+      panel.querySelectorAll('.co-tab').forEach((x) => x.classList.toggle('co-aktiv', x === t));
+      panel.querySelectorAll('[data-panel]').forEach((p) =>
+        p.classList.toggle('co-hidden', p.dataset.panel !== t.dataset.tab));
+    });
+  });
+
+  function abzugWert() {
+    const v = num($('.co-abzug').value);
+    if (v === null || v < 0) return OPT_STANDARD.maxSprachabzug;
+    return Math.min(100, v);
+  }
+  function abzugInfo() {
+    const v = abzugWert();
+    $('.co-abzuginfo').textContent = v === 0
+      ? 'Sprache zählt nicht für die Punkte. Das Sprachfeedback wird trotzdem geschrieben.'
+      : `Höchstabzug ${prozentText(v)} %. Ein Fehler kostet ${prozentText(Math.round(v / 3 * 10) / 10)} %, `
+        + `zwei ${prozentText(Math.round(v / 2 * 10) / 10)} %, drei ${prozentText(Math.round(v * 2 / 3 * 10) / 10)} %, `
+        + `vier ${prozentText(Math.round(v * 5 / 6 * 10) / 10)} %, ab fünf ${prozentText(v)} %. `
+        + 'Schwere Fehler zählen doppelt.';
+  }
+  function kiVorschau() {
+    const p = $('.co-kivorschau');
+    const satz = (optionen.kiHinweisText || KI_HINWEIS_STANDARD).trim();
+    if (!$('.co-ki').checked || !satz) { p.classList.add('co-hidden'); return; }
+    p.classList.remove('co-hidden');
+    p.textContent = 'Angehängt wird: „' + satz + '" (kursiv, kleine Schrift). Ändern unter ⚙.';
+  }
+  $('.co-ki').addEventListener('change', kiVorschau);
+  $('.co-abzug').addEventListener('input', abzugInfo);
+  $('.co-abzug').addEventListener('change', async () => {
+    abzugInfo(); await optionenSpeichern({ maxSprachabzug: abzugWert() });
+  });
+  $('.co-nurmarker').addEventListener('change', async (e) => {
+    await optionenSpeichern({ nurMitMarker: e.target.checked });
+  });
+
+  optionenLaden().then(() => {
+    $('.co-abzug').value = prozentText(optionen.maxSprachabzug ?? OPT_STANDARD.maxSprachabzug);
+    $('.co-kitext').value = optionen.kiHinweisText || KI_HINWEIS_STANDARD;
+    // Ein leeres Feld, das „Standard" bedeutet, ist eine Blackbox: man sieht nicht,
+    // was tatsächlich verschickt wird. Deshalb steht hier immer der volle Text.
+    // Gespeichert wird nur, was vom Standard abweicht.
+    $('.co-prompt').value = optionen.promptOverride || bewertungsPromptVorlage();
+    $('.co-hprompt').value = optionen.horizontPromptOverride || horizontPromptVorlage();
+    $('.co-nurmarker').checked = !!optionen.nurMitMarker;
+    abzugInfo(); kiVorschau();
+  });
+
+  function optInfo(t) {
+    const i = $('.co-optinfo');
+    i.textContent = t; i.classList.remove('co-hidden');
+    setTimeout(() => i.classList.add('co-hidden'), 3000);
+  }
+  $('.co-optsave').addEventListener('click', async () => {
+    await optionenSpeichern({
+      maxSprachabzug: abzugWert(),
+      nurMitMarker: $('.co-nurmarker').checked,
+      kiHinweisText: $('.co-kitext').value.trim() || KI_HINWEIS_STANDARD
+    });
+    $('.co-kitext').value = optionen.kiHinweisText;
+    abzugInfo(); kiVorschau(); optInfo('Gespeichert ✓');
+  });
+
+  // Die Prompts werden dort bearbeitet, wo sie benutzt werden — der Bewertungs-Prompt
+  // in Reiter 1, der Horizont-Prompt in Reiter 3. Sonst steht das Anpassen eines
+  // Prompts weit weg von dem Knopf, der ihn kopiert.
+  function kurzQuittung(knopf, text, urText) {
+    knopf.textContent = text;
+    setTimeout(() => (knopf.textContent = urText), 2000);
+  }
+  $('.co-promptstd').addEventListener('click', () => {
+    $('.co-prompt').value = bewertungsPromptVorlage();
+    kurzQuittung($('.co-promptstd'), '✓ eingefügt', 'Standard einfügen');
+  });
+  $('.co-promptsave').addEventListener('click', async () => {
+    const v = $('.co-prompt').value.trim();
+    // Deckungsgleich mit dem Standard = kein eigener Prompt. Sonst friert man die
+    // mitgelieferte Fassung ein und bekommt spätere Verbesserungen nicht mehr mit.
+    const eigen = (v === bewertungsPromptVorlage().trim()) ? '' : v;
+    await optionenSpeichern({ promptOverride: eigen });
+    kurzQuittung($('.co-promptsave'), eigen ? '✓ eigener Prompt gespeichert' : '✓ Standard',
+                 'Prompt speichern');
+  });
+  $('.co-hpromptstd').addEventListener('click', () => {
+    $('.co-hprompt').value = horizontPromptVorlage();
+    kurzQuittung($('.co-hpromptstd'), '✓ eingefügt', 'Standard einfügen');
+  });
+  $('.co-hpromptsave').addEventListener('click', async () => {
+    const v = $('.co-hprompt').value.trim();
+    const eigen = (v === horizontPromptVorlage().trim()) ? '' : v;
+    await optionenSpeichern({ horizontPromptOverride: eigen });
+    kurzQuittung($('.co-hpromptsave'), eigen ? '✓ eigener Prompt gespeichert' : '✓ Standard',
+                 'Prompt speichern');
+  });
+  $('.co-optreset').addEventListener('click', async () => {
+    await optionenSpeichern({ ...OPT_STANDARD });
+    $('.co-abzug').value = prozentText(OPT_STANDARD.maxSprachabzug);
+    $('.co-nurmarker').checked = OPT_STANDARD.nurMitMarker;
+    $('.co-kitext').value = KI_HINWEIS_STANDARD;
+    $('.co-prompt').value = bewertungsPromptVorlage();
+    $('.co-hprompt').value = horizontPromptVorlage();
+    abzugInfo(); kiVorschau();
+    optInfo('Auf Standard zurückgesetzt — auch die Prompts in Reiter 1 und 3.');
+  });
+
+  $('.co-meta').textContent = (document.title || '').replace(/\s*\|.*$/, '').trim()
+    || 'Manuelle Bewertung';
+
+  /* ---- Reiter 1: Auslesen ---- */
+
+  $('.co-go').addEventListener('click', async () => {
+    const b = $('.co-go');
+    b.disabled = true; b.textContent = 'läuft …';
+    $('.co-error').classList.add('co-hidden');
+    $('.co-result').classList.add('co-hidden');
+    $('.co-progress').classList.remove('co-hidden');
+    try {
+      ausgabe = await ernten((fertig, gesamt, treffer) => {
+        $('.co-bar').style.width = Math.round((fertig / gesamt) * 100) + '%';
+        $('.co-ptext').textContent = `${fertig} / ${gesamt} Fragen · ${treffer} Antworten`;
+      }, $('.co-bereits').checked);
+
+      const m = ausgabe.meta;
+      const mitH = Object.values(ausgabe.fragen).filter((f) => f.horizont);
+      const ohneH = Object.values(ausgabe.fragen).filter((f) => !f.horizont);
+
+      const fremde = Object.values(ausgabe.fremde || {});
+      $('.co-summary').textContent =
+        `${m.antworten} Antworten auf ${Object.keys(ausgabe.fragen).length} Freitextfragen · `
+        + `${mitH.length} mit Horizont, ${ohneH.length} ohne · ${m.uebersprungen} übersprungen`
+        + (fremde.length ? ` · ${fremde.length} nicht für den Coach` : '');
+
+      const warn = $('.co-warn');
+      if (ohneH.length) {
+        warn.classList.remove('co-hidden');
+        warn.textContent = `⚠ ${ohneH.length} Frage(n) haben keinen Erwartungshorizont. `
+          + 'Sie sind im Prompt nicht enthalten — leg ihn in Reiter 3 an.';
+      } else warn.classList.add('co-hidden');
+
+      /* ---- Zuständigkeit: was gehört wem, und was ist zu tun ---- */
+      const zustBox = $('.co-zust'); zustBox.innerHTML = '';
+      const ohneMarker = Object.values(ausgabe.fragen).filter((f) => f.horizont && !f.zustaendig);
+      if (fremde.length || ohneMarker.length) {
+        zustBox.classList.remove('co-hidden');
+        const fuerGrader = fremde.filter((f) => f.grund === 'grader');
+        const streng = fremde.filter((f) => f.grund !== 'grader');
+        if (fuerGrader.length) {
+          zustBox.appendChild(el('div', 'co-zustkopf',
+            `↷ ${fuerGrader.length} Frage(n) sind für den Moodle AI Grader gebaut — übersprungen.`));
+          fuerGrader.forEach((f) => zustBox.appendChild(el('div', 'co-logzeile', f.name)));
+        }
+        if (streng.length) {
+          zustBox.appendChild(el('div', 'co-zustkopf',
+            `↷ ${streng.length} Frage(n) ohne Marker — übersprungen, weil „nur mit Marker" `
+            + 'eingeschaltet ist (⚙).'));
+          streng.forEach((f) => zustBox.appendChild(el('div', 'co-logzeile', f.name)));
+        }
+        if (ohneMarker.length) {
+          zustBox.appendChild(el('div', 'co-zustkopf',
+            `⚠ ${ohneMarker.length} Frage(n) haben einen Horizont, aber keinen Marker — sie `
+            + 'wurden mitbewertet. Trag den Marker nach, dann ist die Zuständigkeit dauerhaft geklärt.'));
+          ohneMarker.forEach((f) => zustBox.appendChild(el('div', 'co-logzeile', f.name)));
+          const urText = `${MARKER_ZEILE} in ${ohneMarker.length} Frage(n) nachtragen`;
+          const nach = el('button', 'co-marker co-zweit', urText);
+          let bestaetigt = false;
+          nach.addEventListener('click', async () => {
+            // Das schreibt in die Fragensammlung — deshalb zwei Klicks.
+            if (!bestaetigt) {
+              bestaetigt = true;
+              nach.textContent = 'Wirklich? Ändert die Fragen — noch einmal klicken';
+              setTimeout(() => { if (bestaetigt) { bestaetigt = false; nach.textContent = urText; } }, 8000);
+              return;
+            }
+            nach.disabled = true; nach.textContent = 'trage nach …';
+            let ok = 0; const schlecht = [];
+            for (const f of ohneMarker) {
+              try { await markerNachtragen(f.qid); ok++; }
+              catch (e) { schlecht.push(`${f.name}: ${e.message}`); }
+            }
+            nach.textContent = `${ok} nachgetragen`
+              + (schlecht.length ? `, ${schlecht.length} fehlgeschlagen` : '');
+            schlecht.forEach((s) => zustBox.appendChild(el('div', 'co-logzeile', '✗ ' + s)));
+            if (ok) zustBox.appendChild(el('div', 'co-logzeile',
+              'Bitte „Freitextaufgaben durchsuchen" noch einmal laufen lassen — dann liest '
+              + 'die Erweiterung den neuen Stand.'));
+          });
+          zustBox.appendChild(nach);
+        }
+      } else zustBox.classList.add('co-hidden');
+
+      const badge = panel.querySelector('.co-badge');
+      badge.classList.toggle('co-hidden', !ohneH.length);
+      badge.textContent = ohneH.length || '';
+
+      const liste = $('.co-list'); liste.innerHTML = '';
+      Object.values(ausgabe.fragen).forEach((f) => {
+        const kopf = el('div', 'co-qname');
+        kopf.appendChild(el('span', f.horizont ? 'co-ok' : 'co-fehlt', f.horizont ? '✓' : '✗'));
+        kopf.appendChild(el('span', 'co-qtext', ` ${f.name} · ${komma(f.max)} P.`));
+        liste.appendChild(kopf);
+        ausgabe.antworten.filter((a) => a.qid === f.qid).forEach((a) => {
+          const z = el('a', 'co-row');
+          z.href = versuchLink(a); z.target = '_blank'; z.rel = 'noopener';
+          z.appendChild(el('span', 'co-nr', '#' + a.nr));
+          z.appendChild(el('span', 'co-ans', a.antwort.slice(0, 90)));
+          liste.appendChild(z);
+        });
+      });
+
+      // Reiter 3 gleich mit den fehlenden Fragen füllen
+      const oh = $('.co-ohneliste'); oh.innerHTML = '';
+      if (ohneH.length) {
+        oh.appendChild(el('div', 'co-fehlendkopf', 'Ohne Erwartungshorizont:'));
+        ohneH.forEach((f) => oh.appendChild(el('div', 'co-logzeile', `${f.name} — ${f.aufgabe.slice(0, 90)}`)));
+      } else {
+        oh.appendChild(el('div', 'co-logzeile', 'Alle Fragen haben einen Erwartungshorizont — hier ist nichts zu tun.'));
+      }
+
+      ernteSichern();
+      const gr = bauePrompt(ausgabe).length;
+      $('.co-groesse').textContent = `Prompt ≈ ${Math.round(gr / 1000)} 000 Zeichen`;
+      $('.co-result').classList.remove('co-hidden');
+      if (ausgabe.fehler.length) {
+        $('.co-error').textContent = ausgabe.fehler.length + ' Frage(n) konnten nicht geladen werden.';
+        $('.co-error').classList.remove('co-hidden');
+      }
+    } catch (e) {
+      $('.co-error').textContent = 'Fehler: ' + e.message;
+      $('.co-error').classList.remove('co-hidden');
+    } finally {
+      $('.co-progress').classList.add('co-hidden');
+      b.disabled = false; b.textContent = 'Freitextaufgaben durchsuchen';
+    }
+  });
+
+  function nurMitHorizont(a) {
+    const kopie = { meta: { ...a.meta }, fragen: {}, antworten: [] };
+    Object.entries(a.fragen).forEach(([k, f]) => { if (f.horizont) kopie.fragen[k] = f; });
+    const qids = new Set(Object.values(kopie.fragen).map((f) => f.qid));
+    kopie.antworten = a.antworten.filter((x) => qids.has(x.qid));
+    kopie.meta.antworten = kopie.antworten.length;
+    return kopie;
+  }
+
+  function quittung(kl, urText) {
+    const b = $(kl); b.textContent = '✓ kopiert';
+    setTimeout(() => (b.textContent = urText), 2000);
+  }
+  $('.co-copy').addEventListener('click', async () => {
+    if (!ausgabe) return;
+    await inZwischenablage(bauePrompt(nurMitHorizont(ausgabe)));
+    quittung('.co-copy', '📋 Prompt + Daten kopieren');
+  });
+  $('.co-copy2').addEventListener('click', async () => {
+    if (!ausgabe) return;
+    await inZwischenablage(JSON.stringify(nurMitHorizont(ausgabe), null, 1));
+    quittung('.co-copy2', '📋 nur JSON');
+  });
+
+  /* ---- Reiter 2: Eintragen ---- */
+
+  const KEINE_ERNTE = 'Zu diesem Test liegen keine ausgelesenen Daten vor. Bitte zuerst in '
+    + 'Reiter 1 „Freitextaufgaben durchsuchen" laufen lassen.';
+
+  function jsonAusFeld(feld) {
+    const roh = feld.value.replace(/^\s*```(?:json)?/, '').replace(/```\s*$/, '').trim();
+    if (!roh) throw new Error('Das Feld ist leer.');
+    if (!/^[{[]/.test(roh)) throw new Error('Das sieht nicht nach JSON aus — der Text muss mit { beginnen.');
+    return JSON.parse(roh);
+  }
+
+  $('.co-pruef').addEventListener('click', () => {
+    const info = $('.co-pinfo');
+    info.classList.remove('co-hidden');
+    $('.co-schreibknoepfe').classList.add('co-hidden');
+    $('.co-abschluss').classList.add('co-hidden');
+    $('.co-log').classList.add('co-hidden');
+    $('.co-vorschau').innerHTML = '';
+    eintraege = null;
+    try {
+      if (!ausgabe) throw new Error(KEINE_ERNTE);
+      const daten = jsonAusFeld($('.co-json'));
+      const liste = daten.bewertungen || [];
+      if (!liste.length) throw new Error('Keine „bewertungen" im JSON gefunden.');
+      const idx = new Map(ausgabe.antworten.map((a) => [a.qubaid + '|' + a.slot, a]));
+
+      const raus = [];
+      liste.forEach((e, i) => {
+        const nr = i + 1;
+        if (e.qubaid == null || e.slot == null) throw new Error(`Eintrag ${nr}: „qubaid" oder „slot" fehlt.`);
+        const a = idx.get(String(e.qubaid) + '|' + String(e.slot));
+        if (!a) throw new Error(`Eintrag ${nr}: zu qubaid ${e.qubaid} / slot ${e.slot} gibt es keine `
+          + 'ausgelesene Antwort. Stammt das JSON zu diesem Durchlauf?');
+        const inhalt = Number(e.inhalt);
+        if (isNaN(inhalt) || inhalt < 0 || inhalt > 100) {
+          throw new Error(`Eintrag ${nr}: „inhalt" ist kein Prozentwert (${e.inhalt}).`);
+        }
+        const r = punkteRechnen(a.max, inhalt, e.fehler);
+        raus.push({
+          ...a, inhalt, fehler: e.fehler || [], text: (e.text || '').trim(),
+          punkte: r.punkte, gewicht: r.gewicht, abzug: r.abzug,
+          rechnung: `Inhalt ${prozentText(inhalt)} % = ${komma(r.inhaltPunkte)} · `
+            + `${r.gewicht} Fehlerpunkt(e) → −${prozentText(Math.round(r.abzug * 10) / 10)} % · `
+            + `= ${komma(r.punkte)} von ${komma(a.max)}`
+        });
+      });
+
+      eintraege = raus;
+      // Eine fehlerfreie Volltreffer-Antwort braucht keinen Kommentar — sonst
+      // meldet die Prüfung bei einem guten Kurs zwanzig „fehlende" Texte.
+      const ohneText = raus.filter((e) => !e.text && (e.inhalt < 100 || e.gewicht > 0)).length;
+      const seiten = new Set(raus.map((e) => e.slot + '|' + e.qid)).size;
+      info.className = 'co-pinfo co-ok';
+      info.textContent = `✓ ${raus.length} Bewertungen auf ${seiten} Fragenseiten — bereit. `
+        + 'Punkte und Abzug wurden aus Inhalt und Fehlerzahl berechnet.'
+        + (ohneText ? ` ⚠ ${ohneText} Eintrag/Einträge ohne Rückmeldungstext.` : '');
+
+      const box = el('div', 'co-rechnung');
+      raus.forEach((e) => {
+        const z = el('a', 'co-logzeile co-vorschauzeile');
+        const href = versuchLink(e);
+        if (href) { z.href = href; z.target = '_blank'; z.rel = 'noopener'; }
+        z.appendChild(el('span', 'co-vfrage', e.frage));
+        z.appendChild(el('span', 'co-vans', '„' + e.antwort.slice(0, 60) + '"'));
+        z.appendChild(el('span', 'co-vpkt', e.rechnung));
+        box.appendChild(z);
+      });
+      $('.co-vorschau').appendChild(box);
+      $('.co-schreibknoepfe').classList.remove('co-hidden');
+      // Die Knöpfe stehen jetzt direkt unter der Meldung, die lange Vorschau darunter.
+      // Vorher lag „Alle eintragen" hinter 78 Zeilen und war nicht zu sehen.
+      $('.co-schreibknoepfe').scrollIntoView({ block: 'nearest' });
+    } catch (e) {
+      info.className = 'co-pinfo co-error';
+      info.textContent = 'Fehler: ' + e.message;
+    }
+  });
+
+  function logSchreiber(logEl) {
+    return (t, href) => {
+      const z = href ? el('a', 'co-logzeile', t) : el('div', 'co-logzeile', t);
+      if (href) { z.href = href; z.target = '_blank'; z.rel = 'noopener'; }
+      if (t.startsWith('✗') || t.startsWith('⚠')) z.classList.add('co-logfehler');
+      logEl.appendChild(z); logEl.scrollTop = logEl.scrollHeight;
+    };
+  }
+
+  async function schreibLauf(trocken) {
+    if (!eintraege) return;
+    const log = $('.co-log'), abschluss = $('.co-abschluss');
+    log.innerHTML = ''; log.classList.remove('co-hidden');
+    abschluss.classList.add('co-hidden');
+    $('.co-progress2').classList.remove('co-hidden');
+    $('.co-probe').disabled = $('.co-alle').disabled = true;
+    $('.co-progress2').scrollIntoView({ block: 'nearest' });
+    const schreibLog = logSchreiber(log);
+    const fortschritt = (f, g) => {
+      $('.co-bar2').style.width = Math.round((f / g) * 100) + '%';
+      $('.co-ptext2').textContent = `${f} / ${g} Fragenseiten`;
+    };
+    try {
+      const r = trocken
+        ? await trockenlauf(eintraege, schreibLog, fortschritt)
+        : await eintragen(eintraege, $('.co-ki').checked, schreibLog, fortschritt);
+      log.prepend(el('div', 'co-logkopf', trocken
+        ? `${r.ok} Felder gefunden · ${r.fehler} fehlen · ${r.gruppen} Seiten geprüft`
+        : `${r.ok} eingetragen und geprüft · ${r.fehler} fehlgeschlagen · ${r.gruppen} Seiten`));
+      abschluss.classList.remove('co-hidden');
+      if (r.fehler > 0) {
+        abschluss.className = 'co-abschluss co-abfehler';
+        abschluss.textContent = trocken
+          ? `⚠ ${r.fehler} Feld/Felder fehlen. Trag noch nichts ein — stammt das JSON zu diesem Durchlauf?`
+          : `⚠ ${r.fehler} Eintrag/Einträge sind nicht angekommen. Sieh sie im Protokoll nach.`;
+      } else {
+        abschluss.className = 'co-abschluss co-abok';
+        abschluss.textContent = trocken
+          ? `✓ Alles vorhanden — ${r.ok} Felder auf ${r.gruppen} Seiten. Du kannst eintragen.`
+          : `✓ Fertig — ${r.ok} Einträge auf ${r.gruppen} Seiten, keine Fehler.`;
+        // Ohne Fehler gibt es nichts mehr nachzusehen: das Panel schließt sich selbst,
+        // damit das Ende sichtbar ist. Mit Fehlern bleibt es offen — sonst verschwände
+        // genau die Zeile, die man lesen muss. Ein Klick ins Panel bricht ab.
+        if (!trocken) {
+          let rest = 4;
+          const zaehler = setInterval(() => {
+            rest--;
+            abschluss.textContent =
+              `✓ Fertig — ${r.ok} Einträge auf ${r.gruppen} Seiten, keine Fehler. `
+              + `Fenster schließt in ${rest} …`;
+            if (rest <= 0) {
+              clearInterval(zaehler);
+              panel.classList.add('co-hidden');
+              abschluss.textContent =
+                `✓ Fertig — ${r.ok} Einträge auf ${r.gruppen} Seiten, keine Fehler.`;
+            }
+          }, 1000);
+          panel.addEventListener('click', () => clearInterval(zaehler), { once: true });
+        }
+      }
+      abschluss.scrollIntoView({ block: 'nearest' });
+    } catch (e) {
+      schreibLog('✗ Abbruch: ' + e.message);
+    } finally {
+      $('.co-progress2').classList.add('co-hidden');
+      $('.co-probe').disabled = $('.co-alle').disabled = false;
+    }
+  }
+  $('.co-probe').addEventListener('click', () => schreibLauf(true));
+  $('.co-alle').addEventListener('click', () => schreibLauf(false));
+
+  /* ---- Reiter 3: Erwartungshorizont ---- */
+
+  $('.co-hcopy').addEventListener('click', async () => {
+    if (!ausgabe) { $('.co-hinfo').className = 'co-hinfo co-error';
+      $('.co-hinfo').classList.remove('co-hidden');
+      $('.co-hinfo').textContent = KEINE_ERNTE; return; }
+    const ohne = Object.values(ausgabe.fragen).filter((f) => !f.horizont);
+    if (!ohne.length) { $('.co-hinfo').className = 'co-hinfo';
+      $('.co-hinfo').classList.remove('co-hidden');
+      $('.co-hinfo').textContent = 'Es fehlt kein Horizont — hier ist nichts zu tun.'; return; }
+    await inZwischenablage(baueHorizontPrompt(ohne));
+    quittung('.co-hcopy', '📋 Prompt für Erwartungshorizont kopieren');
+  });
+
+  $('.co-hpruef').addEventListener('click', () => {
+    const info = $('.co-hinfo');
+    info.classList.remove('co-hidden');
+    $('.co-hknoepfe').classList.add('co-hidden');
+    $('.co-habschluss').classList.add('co-hidden');
+    $('.co-hlog').classList.add('co-hidden');
+    $('.co-hliste').innerHTML = '';
+    horizonte = null;
+    try {
+      const daten = jsonAusFeld($('.co-hjson'));
+      const liste = daten.horizonte || [];
+      if (!liste.length) throw new Error('Keine „horizonte" im JSON gefunden.');
+      const bekannt = ausgabe
+        ? new Map(Object.values(ausgabe.fragen).map((f) => [String(f.qid), f])) : new Map();
+
+      horizonte = liste.map((h, i) => {
+        if (!h.qid) throw new Error(`Horizont ${i + 1}: „qid" fehlt.`);
+        const f = bekannt.get(String(h.qid));
+        const text = String(h.text || '').trim();
+        if (!text) throw new Error(`Horizont ${i + 1}: „text" ist leer.`);
+        return { qid: String(h.qid), frage: h.frage || (f ? f.name : 'Frage ' + h.qid),
+                 text, bekannt: !!f, hatteHorizont: !!(f && f.horizont) };
+      });
+
+      const ueberschreibt = horizonte.filter((h) => h.hatteHorizont).length;
+      const unbekannt = horizonte.filter((h) => !h.bekannt).length;
+      info.className = 'co-hinfo co-ok';
+      info.textContent = `✓ ${horizonte.length} Horizont(e) gelesen.`
+        + (unbekannt ? ` ⚠ ${unbekannt} gehören zu keiner ausgelesenen Frage.` : '')
+        + (ueberschreibt ? ` ⚠ ${ueberschreibt} würden einen vorhandenen Horizont überschreiben.` : '');
+
+      const box = $('.co-hliste');
+      horizonte.forEach((h, i) => {
+        const k = el('div', 'co-hcard');
+        k.appendChild(el('div', 'co-fehlendkopf', `${h.frage}  ·  qid ${h.qid}`));
+        const ta = el('textarea', 'co-htext');
+        ta.value = h.text; ta.rows = 10;
+        ta.addEventListener('input', () => { horizonte[i].text = ta.value; });
+        k.appendChild(ta);
+        box.appendChild(k);
+      });
+      $('.co-hknoepfe').classList.remove('co-hidden');
+      info.scrollIntoView({ block: 'nearest' });
+    } catch (e) {
+      info.className = 'co-hinfo co-error';
+      info.textContent = 'Fehler: ' + e.message;
+    }
+  });
+
+  async function horizontLauf(trocken) {
+    if (!horizonte || !horizonte.length) return;
+    const log = $('.co-hlog'), abschluss = $('.co-habschluss');
+    log.innerHTML = ''; log.classList.remove('co-hidden');
+    abschluss.classList.add('co-hidden');
+    $('.co-progress3').classList.remove('co-hidden');
+    $('.co-hprobe').disabled = $('.co-hschreib').disabled = true;
+    $('.co-progress3').scrollIntoView({ block: 'nearest' });
+    const schreibLog = logSchreiber(log);
+    let ok = 0, fehler = 0, fertig = 0;
+    try {
+      for (const h of horizonte) {
+        try {
+          const r = await horizontSchreiben(h.qid, h.text, trocken);
+          ok++;
+          schreibLog(trocken
+            ? `✓ ${h.frage} — Feld „${r.feld}" vorhanden`
+              + (r.vorher && r.vorher.replace(/<[^>]*>/g, '').trim() ? ' (enthält schon Text!)' : '')
+            : `✓ ${h.frage} — Horizont eingetragen`);
+        } catch (e) {
+          fehler++; schreibLog(`✗ ${h.frage}: ${e.message}`);
+        }
+        fertig++;
+        $('.co-bar3').style.width = Math.round((fertig / horizonte.length) * 100) + '%';
+        $('.co-ptext3').textContent = `${fertig} / ${horizonte.length} Fragen`;
+      }
+      log.prepend(el('div', 'co-logkopf', trocken
+        ? `${ok} Fragen erreichbar · ${fehler} nicht`
+        : `${ok} Horizonte eingetragen · ${fehler} fehlgeschlagen`));
+      abschluss.classList.remove('co-hidden');
+      abschluss.className = 'co-habschluss ' + (fehler ? 'co-abfehler' : 'co-abok');
+      abschluss.textContent = fehler
+        ? `⚠ ${fehler} Frage(n) konnten nicht geschrieben werden. Sieh ins Protokoll.`
+        : (trocken
+          ? `✓ Alle ${ok} Fragen sind erreichbar und haben das Feld. Du kannst eintragen.`
+          : `✓ ${ok} Horizonte stehen jetzt in den Fragen. Führe Reiter 1 noch einmal aus, `
+            + 'dann sind sie im Bewertungs-Prompt dabei.');
+      abschluss.scrollIntoView({ block: 'nearest' });
+    } finally {
+      $('.co-progress3').classList.add('co-hidden');
+      $('.co-hprobe').disabled = $('.co-hschreib').disabled = false;
+    }
+  }
+  $('.co-hprobe').addEventListener('click', () => horizontLauf(true));
+  $('.co-hschreib').addEventListener('click', () => {
+    // Das schreibt in die Fragensammlung, nicht in eine Bewertung. Einmal nachfragen.
+    const n = horizonte ? horizonte.length : 0;
+    if (!n) return;
+    const box = $('.co-habschluss');
+    box.classList.remove('co-hidden');
+    box.className = 'co-habschluss co-abfrage';
+    box.innerHTML = '';
+    box.appendChild(el('div', null,
+      `Der Erwartungshorizont wird in ${n} Frage(n) der Fragensammlung geschrieben. `
+      + 'Das ändert die Fragen selbst, nicht nur eine Bewertung.'));
+    const ja = el('button', 'co-jetzt', `Ja, in ${n} Frage(n) eintragen`);
+    box.appendChild(ja);
+    ja.addEventListener('click', () => { box.classList.add('co-hidden'); horizontLauf(false); });
+  });
+})();

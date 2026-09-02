@@ -1,0 +1,24 @@
+# macOS
+.DS_Store
+._*
+.Spotlight-V100
+.Trashes
+
+# Sicherungen und Zwischenstaende
+*.bak
+*.orig
+*.tmp
+_backup/
+_to_delete/
+
+# ZIPs: nur die fertigen Pakete unter dist/ gehoeren ins Repo — an ihnen haengen
+# die festen Download-Links. Alle anderen ZIPs bleiben draussen.
+*.zip
+!dist/*.zip
+
+# Nur fuer Arne, gehoert nicht ins oeffentliche Repo
+_ANLEITUNG-GitHub.md
+
+# Editor
+.vscode/
+.idea/
