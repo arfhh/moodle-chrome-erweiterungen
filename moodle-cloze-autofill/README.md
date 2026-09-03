@@ -232,7 +232,7 @@ moodle-cloze-autofill/
 ```
 
 Testfälle für die reine Logik (56 Prüfungen) liegen unter
-`Chrom Erweiterungen/_tests/cloze-autofill/test-cloze-autofill.js`.
+`_tests/cloze-autofill/test-cloze-autofill.js` (im Repo-Ordner).
 Sie schneiden den geprüften Block direkt aus `content.js` heraus, statt ihn zu kopieren —
 Aufruf mit `node test-cloze-autofill.js`. Stand: 56 Prüfungen, alle bestanden.
 
