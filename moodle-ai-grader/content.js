@@ -157,10 +157,22 @@
     return (!isNaN(jg) && jg >= 11) ? 'Sie haben' : 'Du hast';
   }
 
+  // ACHTUNG: innerText liefert bei einem Element, das NICHT im Dokument haengt,
+  // dasselbe wie textContent — ohne Zeilenumbrueche. Deshalb die Blockenden vorher
+  // selbst zu Umbruechen machen, statt sich auf die Darstellung zu verlassen.
   function htmlZuText(html) {
     const d = document.createElement('div');
-    d.innerHTML = String(html || '');
-    return (d.innerText || d.textContent || '').trim();
+    d.innerHTML = String(html || '')
+      .replace(/<br\s*\/?>/gi, '\n')
+      .replace(/<\/(p|div|h[1-6]|li|tr|blockquote)>/gi, '</$1>\n');
+    return (d.textContent || '').replace(/[ \t]+/g, ' ').replace(/\n{3,}/g, '\n\n').trim();
+  }
+
+  // Blockelemente — nur sie gliedern; alles andere ist Inline und gehoert zum Elterntext.
+  const BLOCK_RE = /^(DIV|P|H[1-6]|UL|OL|LI|TABLE|TBODY|TR|TD|TH|BLOCKQUOTE|SECTION|ARTICLE|PRE)$/;
+
+  function nurText(knoten) {
+    return String(knoten.textContent || '').replace(/\s+/g, ' ').trim();
   }
 
   /* ═══════════════════════════════════════════════════════════════════
@@ -306,7 +318,7 @@
     const bloecke = [];
     let aktuell = null;
     [...wurzel.children].forEach(kind => {
-      const zeile = (kind.innerText || kind.textContent || '').trim();
+      const zeile = nurText(kind);
       const m = zeile.match(AUFGABE_RE);
       if (m && /^(H[1-6]|P|DIV)$/.test(kind.tagName) && zeile.length < 200) {
         aktuell = { nr: parseInt(m[1], 10), kopf: zeile, html: '', text: '' };
@@ -315,7 +327,7 @@
       }
       if (aktuell) {
         aktuell.html += kind.outerHTML;
-        aktuell.text += (kind.innerText || kind.textContent || '') + '\n';
+        aktuell.text += htmlZuText(kind.outerHTML) + '\n';
       }
     });
     if (!bloecke.length) {
@@ -383,28 +395,34 @@
     const bloecke = [];
     let aktuell = null;
 
-    const durchlaufen = (knoten) => {
-      [...knoten.children].forEach(kind => {
-        const zeile = (kind.innerText || kind.textContent || '').trim();
-        const kopfZeile = zeile.split('\n')[0].trim();
-        const m = kopfZeile.match(AUFGABE_RE);
-        // Eine Kopfzeile ist kurz und beginnt mit „Aufgabe N".
-        if (m && kopfZeile.length < 160 && kopfZeile.length >= zeile.length - 2) {
+    // Strukturell absteigen: Ein Element mit Block-Kindern ist ein Behaelter, kein
+    // Inhalt. Nur ein Blatt-Block kann Kopfzeile sein. Sich auf Zeilenumbrueche zu
+    // verlassen geht schief — siehe Hinweis bei htmlZuText.
+    const lauf = (knoten) => {
+      const kinder = [...knoten.children];
+      const bloeckeDrin = kinder.filter(k => BLOCK_RE.test(k.tagName));
+      if (!bloeckeDrin.length) {
+        const t = nurText(knoten);
+        if (!t) return;
+        const m = t.match(AUFGABE_RE);
+        if (m && t.length < 160) {
           aktuell = { nr: parseInt(m[1], 10), text: '' };
           bloecke.push(aktuell);
-          return;
+        } else if (aktuell) {
+          aktuell.text += t + '\n';
         }
-        if (m && kind.children.length) { durchlaufen(kind); return; }
-        if (aktuell) aktuell.text += zeile + '\n';
-        else if (kind.children.length) durchlaufen(kind);
-      });
+        return;
+      }
+      bloeckeDrin.forEach(lauf);
     };
-    durchlaufen(wurzel);
+    lauf(wurzel);
 
-    const gefuellt = bloecke.filter(b => b.text.trim());
-    if (bloecke.length >= 2 && gefuellt.length) {
+    // Eine gefundene Kopfzeile genuegt: Auch eine Abgabe, in der noch nichts steht, ist
+    // gegliedert — sonst bekaeme eine leere Klausur den Rueckfall statt sauberer Nuller
+    // je Aufgabe. Erst wenn gar keine Kopfzeile da ist, greift Stufe 2.
+    if (bloecke.length >= 1) {
       bloecke.forEach(b => { b.text = b.text.trim(); });
-      return { gegliedert: true, aufgaben: bloecke };
+      return { gegliedert: true, aufgaben: bloecke, leer: bloecke.every(b => !b.text) };
     }
     return { gegliedert: false, aufgaben: [{ nr: 1, text: String(klartext || '').trim() }] };
   }
@@ -479,14 +497,36 @@
     const anteil = rsAnteil(gew, wz);
     const abzug = Math.min(hoechstabzug * anteil, inhalt);
 
-    // Abzug proportional zur Aufgabenpunktzahl verteilen, damit die Einzelwerte stimmen.
+    // Abzug proportional zur Aufgabenpunktzahl verteilen.
     teil.forEach(t => {
       const anteilT = inhalt > 0 ? t.roh / inhalt : 0;
       t.abzug = abzug * anteilT;
-      t.punkte = rundePunkte(t.roh - t.abzug, t.max);
+      t.netto = Math.max(0, t.roh - t.abzug);
     });
 
-    const summe = teil.reduce((s, t) => s + t.punkte, 0);
+    // Gerundet wird die GESAMTpunktzahl — nur sie traegt Moodle ein. Wuerde jede
+    // Teilaufgabe einzeln gerundet, verschwaende ein kleiner Rechtschreibabzug
+    // spurlos und die Summe kletterte nach oben.
+    const summe = rundePunkte(teil.reduce((s, t) => s + t.netto, 0), gesamtMax);
+
+    // Die Teilpunkte fuers Feedback so runden, dass ihre Summe die Gesamtpunktzahl
+    // wirklich ergibt (groesste Reste zuerst) — sonst widerspricht sich das Feedback.
+    const schritt = parseFloat(E.punkteschritte) || 0.5;
+    teil.forEach(t => {
+      t.punkte = Math.max(0, Math.floor(t.netto / schritt + 1e-9) * schritt);
+      t.rest = t.netto - t.punkte;
+    });
+    let offen = Math.round((summe - teil.reduce((s, t) => s + t.punkte, 0)) / schritt);
+    const nachRest = teil.slice().sort((a, b) => b.rest - a.rest);
+    for (let i = 0; offen > 0 && i < nachRest.length * 4; i++) {
+      const t = nachRest[i % nachRest.length];
+      if (t.punkte + schritt <= t.max + 1e-9) { t.punkte += schritt; offen--; }
+    }
+    for (let i = 0; offen < 0 && i < nachRest.length * 4; i++) {
+      const t = nachRest[nachRest.length - 1 - (i % nachRest.length)];
+      if (t.punkte - schritt >= -1e-9) { t.punkte -= schritt; offen++; }
+    }
+    teil.forEach(t => { t.punkte = Math.round(t.punkte * 100) / 100; });
     return {
       teil: teil,
       wortzahl: wz,
@@ -494,7 +534,7 @@
       fehlerDichte: wz > 0 ? Math.round((gew * 1000) / wz) / 10 : 0,
       hoechstabzug: Math.round(hoechstabzug * 100) / 100,
       abzug: Math.round(abzug * 100) / 100,
-      gesamt: rundePunkte(summe, gesamtMax),
+      gesamt: summe,
       max: gesamtMax,
       fehlendeAufgaben: fehlendeAufgaben
     };
