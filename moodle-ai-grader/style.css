@@ -162,3 +162,12 @@
 .mag-rahmen > [data-rolle] { font-size: 12px; color: #1f2933; line-height: 1.5; }
 .mag-rahmen .mag-btn { width: auto; margin-top: 6px; padding: 4px 10px; }
 .mag-rahmen.unvollstaendig { border-color: #e0b48a; border-left-color: #b45309; background: #fdf7ef; }
+
+/* Warnbanner nach dem Speichern: die offene Seite zeigt dann eine tote Fassung.
+   Wer hier weiterspeichert, ueberschreibt das eben Geschriebene. */
+.mag-banner.warnung {
+  background: #fbe9e9; color: #8a1f1f; border-bottom: 1px solid #e4bcbc;
+  font-weight: 600;
+}
+.mag-banner.warnung .mag-btn { width: auto; display: inline-block; margin: 8px 6px 0 0; }
+.mag-banner.warnung .mag-hinweis { color: #8a1f1f; opacity: .85; margin-top: 4px; }

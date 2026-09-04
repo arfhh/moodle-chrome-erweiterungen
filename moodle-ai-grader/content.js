@@ -1402,16 +1402,15 @@ Liefere für JEDE Abgabe des Blocks einen Eintrag, auch für leere Abgaben
         if (!x.ok) fehler++;
       });
       if (fehler) return status(statusRolle, fehler + ' Feld(er) nicht angekommen — Protokoll lesen.', true);
-      // Speichern hat eine neue Fragenversion erzeugt. Die offene Seite zeigt die alte —
-      // deshalb dorthin wechseln, nicht neu laden, sonst arbeitet man am toten Stand weiter.
-      if (r.neueUrl) {
-        log('→ neue Fragenversion: ' + r.neueUrl.replace(location.origin, ''));
-        status(statusRolle, 'Eingetragen und gegengeprüft. Wechsle zur neuen Fragenversion …');
-        setTimeout(() => { location.href = r.neueUrl; }, 2500);
-      } else {
-        status(statusRolle, 'Eingetragen und gegengeprüft. Bitte die Frage neu öffnen — '
-          + 'Moodle hat beim Speichern eine neue Version angelegt.');
-      }
+      // Speichern hat eine neue Fragenversion erzeugt. Das offene Formular zeigt weiter
+      // den ALTEN Stand — wer dort auf „Änderungen speichern" drückt, überschreibt das
+      // eben Geschriebene wieder. Deshalb deutlich warnen und wechseln, nicht still.
+      log('✓ gespeichert und gegengeprüft');
+      veralteteSeiteMelden(r.neueUrl);
+      status(statusRolle, r.neueUrl
+        ? 'Eingetragen und gegengeprüft. Diese Seite zeigt jetzt einen veralteten Stand.'
+        : 'Eingetragen und gegengeprüft. Bitte die Frage neu öffnen — Moodle hat beim '
+          + 'Speichern eine neue Version angelegt.', false);
     } catch (e) {
       log('✗ ' + e.message);
       status(statusRolle, 'Fehler: ' + e.message, true);
@@ -1621,6 +1620,39 @@ Liefere für JEDE Abgabe des Blocks einen Eintrag, auch für leere Abgaben
     },
     pabbruch: () => zeige(letzterReiter)
   };
+
+  // Nach dem Schreiben ist die offene Seite tot: Moodle hat eine neue Fragenversion
+  // angelegt. Das muss man sehen, nicht erraten — sonst speichert man den alten Stand
+  // darüber. Der Wechsel läuft automatisch, lässt sich aber anhalten.
+  let wechselTimer = null;
+  function veralteteSeiteMelden(neueUrl) {
+    const banner = panel.querySelector('.mag-banner');
+    banner.hidden = false;
+    banner.className = 'mag-banner warnung';
+    banner.innerHTML = '';
+    banner.appendChild(el('div', null,
+      'Moodle hat beim Speichern eine neue Fassung der Frage angelegt. '
+      + 'Dieses Formular zeigt den alten Stand — hier nichts mehr speichern!'));
+    if (!neueUrl) return;
+    const knopf = el('button', 'mag-btn mag-btn-ok', 'Zur neuen Fassung der Frage');
+    const halt = el('button', 'mag-btn mag-btn-klein mag-btn-grau', 'hier bleiben');
+    knopf.addEventListener('click', () => { location.href = neueUrl; });
+    banner.appendChild(knopf);
+    banner.appendChild(halt);
+    let rest = 8;
+    const zaehler = el('div', 'mag-hinweis', 'Wechsel in ' + rest + ' Sekunden …');
+    banner.appendChild(zaehler);
+    halt.addEventListener('click', () => {
+      clearInterval(wechselTimer); wechselTimer = null;
+      zaehler.textContent = 'Wechsel angehalten. Diese Seite bitte nicht mehr speichern.';
+      halt.remove();
+    });
+    wechselTimer = setInterval(() => {
+      rest--;
+      if (rest <= 0) { clearInterval(wechselTimer); location.href = neueUrl; return; }
+      zaehler.textContent = 'Wechsel in ' + rest + ' Sekunden …';
+    }, 1000);
+  }
 
   function oeffnePromptEditor(ziel) {
     promptZiel = ziel;
