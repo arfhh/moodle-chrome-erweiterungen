@@ -946,9 +946,15 @@ Liefere für JEDE Abgabe des Blocks einen Eintrag, auch für leere Abgaben
      aus dem Sichtfeld und die Erweiterung wirkt tot.
      ═══════════════════════════════════════════════════════════════════ */
 
+  // Beim Bearbeiten stehen die Einstellungen VORNE: ihre Werte gehen ungeprüft als
+  // Rahmendaten in den Horizont-Prompt, und davon hängt alles Weitere ab.
+  // Beim Bearbeiten ist das eine feste Reihenfolge — deshalb nummeriert:
+  // erst die Rahmendaten, dann der Horizont, dann die Vorlage daraus.
+  // Auf der Bewertungsseite steht die Korrektur vorn; Horizont und Einstellungen
+  // sind dort Nacharbeit und bekommen keine Nummer.
   const REITER = KONTEXT === 'bearbeiten'
-    ? [['horizont', 'Erwartungshorizont'], ['vorlage', 'Antwortvorlage']]
-    : [['korrektur', 'Korrektur'], ['horizont', 'Erwartungshorizont']];
+    ? [['einst', '1 · Einstellungen'], ['horizont', '2 · Horizont'], ['vorlage', '3 · Vorlage']]
+    : [['korrektur', 'Korrektur'], ['horizont', 'Horizont'], ['einst', 'Einstellungen']];
 
   const panel = el('div', 'mag-panel');
   panel.innerHTML = `
@@ -965,6 +971,11 @@ Liefere für JEDE Abgabe des Blocks einen Eintrag, auch für leere Abgaben
 
     <div class="mag-inhalt" data-panel="horizont">
       <div class="mag-status" data-rolle="hstatus"></div>
+      <div class="mag-rahmen">
+        <div class="mag-rahmen-titel">Diese Angaben gehen in den Prompt</div>
+        <div data-rolle="hrahmen"></div>
+        <button class="mag-btn mag-btn-klein mag-btn-rand" data-tu="zueinst">ändern</button>
+      </div>
       <label>1 · Prompt für die KI</label>
       <div class="mag-reihe">
         <button class="mag-btn mag-btn-primary" data-tu="hprompt">📋 Prompt kopieren</button>
@@ -1008,6 +1019,11 @@ Liefere für JEDE Abgabe des Blocks einen Eintrag, auch für leere Abgaben
 
     <div class="mag-inhalt" data-panel="korrektur" hidden>
       <div class="mag-status" data-rolle="kstatus"></div>
+      <div class="mag-rahmen">
+        <div class="mag-rahmen-titel">Diese Angaben gehen in den Prompt und in die Rechnung</div>
+        <div data-rolle="krahmen"></div>
+        <button class="mag-btn mag-btn-klein mag-btn-rand" data-tu="zueinst">ändern</button>
+      </div>
       <label>Abgaben je Durchgang</label>
       <select data-rolle="kgroesse"></select>
       <div class="mag-hinweis" data-rolle="kgroessehinweis"></div>
@@ -1029,6 +1045,10 @@ Liefere für JEDE Abgabe des Blocks einen Eintrag, auch für leere Abgaben
     </div>
 
     <div class="mag-inhalt" data-panel="einst" hidden>
+      <div class="mag-status" data-rolle="estatus"></div>
+      <p class="mag-hinweis">Diese Angaben stehen später als Rahmendaten im Prompt und
+      steuern, wie die Erweiterung rechnet. Bitte einmal durchsehen, bevor du den Prompt
+      kopierst — nachträglich lässt sich ein Horizont nur neu erzeugen.</p>
       <label>Fach</label><input type="text" data-opt="fach" placeholder="z. B. Chemie">
       <label>Jahrgang</label><input type="text" data-opt="jahrgang" placeholder="z. B. 10">
       <div class="mag-hinweis" data-rolle="anredehinweis"></div>
@@ -1067,8 +1087,8 @@ Liefere für JEDE Abgabe des Blocks einen Eintrag, auch für leere Abgaben
       <label class="mag-haken"><input type="checkbox" data-opt="kiHinweis"> KI-Transparenzhinweis unter das Feedback</label>
       <label class="mag-haken"><input type="checkbox" data-opt="entferneQuellen"> Quellenangaben entfernen</label>
       <div class="mag-reihe">
-        <button class="mag-btn mag-btn-ok" data-tu="esichern">Speichern</button>
-        <button class="mag-btn mag-btn-grau" data-tu="eabbruch">Abbrechen</button>
+        <button class="mag-btn mag-btn-ok" data-tu="esichern">Speichern und weiter</button>
+        <button class="mag-btn mag-btn-grau" data-tu="eabbruch">Verwerfen</button>
       </div>
     </div>
 
@@ -1155,7 +1175,38 @@ Liefere für JEDE Abgabe des Blocks einen Eintrag, auch für leere Abgaben
     sichereEinstellungen();
     hinweiseAktualisieren();
   }
+  // Kurzfassung der Einstellungen fuer die Zeile ueber den Kopierknoepfen.
+  function einstellungenZeile() {
+    const rs = (E.rsStrenge === 'keine' || parseFloat(E.rechtschreibung) === 0)
+      ? 'Rechtschreibung: kein Abzug'
+      : 'Rechtschreibung: ' + E.rechtschreibung + ' % (' + E.rsStrenge + ')';
+    return [
+      (E.fach || '⚠ Fach fehlt'),
+      'Jahrgang ' + (E.jahrgang || '⚠ fehlt'),
+      'Niveau ' + (NIVEAU[E.kursniveau] || E.kursniveau).split(' ')[0],
+      'Feedback ' + E.feedbacklaenge,
+      rs,
+      'Schritte ' + komma(E.punkteschritte)
+    ].join(' · ');
+  }
+
+  function einstellungenUnvollstaendig() {
+    return !String(E.fach || '').trim() || !String(E.jahrgang || '').trim();
+  }
+
+  function rahmenzeilenAktualisieren() {
+    const text = einstellungenZeile();
+    const fehlt = einstellungenUnvollstaendig();
+    ['hrahmen', 'krahmen'].forEach(r => {
+      const n = R(r);
+      if (!n) return;
+      n.textContent = text;
+      n.parentElement.classList.toggle('unvollstaendig', fehlt);
+    });
+  }
+
   function hinweiseAktualisieren() {
+    rahmenzeilenAktualisieren();
     const a = R('anredehinweis');
     if (a) a.textContent = 'Im Feedback wird „' + anrede() + ' …" verwendet.';
     const rs = R('rshinweis');
@@ -1179,7 +1230,7 @@ Liefere für JEDE Abgabe des Blocks einen Eintrag, auch für leere Abgaben
     panel.querySelectorAll('.mag-tab').forEach(t => t.classList.toggle('aktiv', t.dataset.tab === name));
     const istReiter = REITER.some(r => r[0] === name);
     panel.querySelector('.mag-reiter').hidden = !istReiter;
-    if (istReiter) letzterReiter = name;
+    if (istReiter && name !== 'einst') letzterReiter = name;
     if (name === 'vorlage') hinweiseAktualisieren();
     if (name === 'korrektur') stapelAufbauen();
   }
@@ -1437,7 +1488,8 @@ Liefere für JEDE Abgabe des Blocks einen Eintrag, auch für leere Abgaben
   let promptZiel = 'horizont';
 
   const AKTIONEN = {
-    einst:  () => { formularAusEinstellungen(); zeige('einst'); },
+    einst:   () => { formularAusEinstellungen(); zeige('einst'); },
+    zueinst: () => { formularAusEinstellungen(); zeige('einst'); },
     zu:     () => { panel.classList.remove('offen'); knopf.classList.remove('versteckt'); },
 
     hprompt: () => kopiere(baueHorizontPrompt(), 'hstatus', 'Prompt kopiert.'),
@@ -1478,8 +1530,17 @@ Liefere für JEDE Abgabe des Blocks einen Eintrag, auch für leere Abgaben
       })
     }, null, 2), 'kstatus', 'Rohdaten kopiert.'),
 
-    esichern:  () => { einstellungenAusFormular(); zeige(letzterReiter); },
-    eabbruch:  () => zeige(letzterReiter),
+    esichern: () => {
+      einstellungenAusFormular();
+      if (einstellungenUnvollstaendig()) {
+        return status('estatus', 'Fach und Jahrgang fehlen noch — beides steht im Prompt '
+          + 'und bestimmt Anspruchsniveau und Anrede.', true);
+      }
+      status('estatus', '');
+      zeige(KONTEXT === 'bearbeiten' ? 'horizont'
+            : (letzterReiter === 'einst' ? 'korrektur' : letzterReiter));
+    },
+    eabbruch: () => { formularAusEinstellungen(); status('estatus', ''); },
 
     psichern: () => {
       const t = R('ptext').value.trim();
@@ -1551,10 +1612,20 @@ Liefere für JEDE Abgabe des Blocks einen Eintrag, auch für leere Abgaben
         + 'Er lässt sich hier nachtragen.';
     }
 
-    // Fehlt der Horizont, springt die Erweiterung von selbst in den Horizont-Reiter.
-    const start = (KONTEXT === 'bewertung' && !z.horizont && !E.horizontLokal)
-      ? 'horizont' : REITER[0][0];
+    // Reihenfolge der Selbstauswahl: fehlende Einstellungen zuerst — ohne Fach und
+    // Jahrgang taugt der Prompt nicht. Danach der fehlende Horizont.
+    let start;
+    if (einstellungenUnvollstaendig()) {
+      start = 'einst';
+      status('estatus', 'Bitte einmal ausfüllen: Fach und Jahrgang fehlen. '
+        + 'Beides geht als Rahmendatum in den Prompt.', true);
+    } else if (KONTEXT === 'bewertung' && !z.horizont && !E.horizontLokal) {
+      start = 'horizont';
+    } else {
+      start = KONTEXT === 'bearbeiten' ? 'horizont' : 'korrektur';
+    }
     zeige(start);
+    rahmenzeilenAktualisieren();
 
     if (KONTEXT === 'bewertung') {
       const n = leseAbgaben().length;
