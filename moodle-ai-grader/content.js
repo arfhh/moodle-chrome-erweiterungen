@@ -953,6 +953,7 @@ Liefere für JEDE Abgabe des Blocks einen Eintrag, auch für leere Abgaben
   const panel = el('div', 'mag-panel');
   panel.innerHTML = `
     <div class="mag-kopf">
+      <img class="mag-kopfbild" alt="">
       <span class="mag-titel">Moodle AI Grader</span>
       <button class="mag-ikon" data-tu="einst" title="Einstellungen">⚙</button>
       <button class="mag-ikon" data-tu="zu" title="Schließen">✖</button>
@@ -1081,8 +1082,15 @@ Liefere für JEDE Abgabe des Blocks einen Eintrag, auch für leere Abgaben
       </div>
     </div>`;
 
-  const knopf = el('button', 'mag-knopf', 'AI');
+  // Runder Knopf mit dem Erweiterungs-Icon — wie bei Reviewer und Coach.
+  // Das Bild braucht web_accessible_resources im Manifest, sonst bleibt es leer.
+  const knopf = el('button', 'mag-knopf');
   knopf.title = 'Moodle AI Grader';
+  const knopfBild = document.createElement('img');
+  knopfBild.className = 'mag-knopf-bild';
+  knopfBild.alt = 'Moodle AI Grader';
+  try { knopfBild.src = chrome.runtime.getURL('icons/icon128.png'); } catch (e) { knopf.textContent = 'AI'; }
+  if (knopfBild.src) knopf.appendChild(knopfBild);
 
   const R = rolle => panel.querySelector('[data-rolle="' + rolle + '"]');
   const P = name  => panel.querySelector('[data-panel="' + name + '"]');
@@ -1522,6 +1530,10 @@ Liefere für JEDE Abgabe des Blocks einen Eintrag, auch für leere Abgaben
 
   /* --- Start --- */
   ladeEinstellungen().then(() => {
+    try {
+      const kb = panel.querySelector('.mag-kopfbild');
+      if (kb) kb.src = chrome.runtime.getURL('icons/icon128.png');
+    } catch (e) { const kb = panel.querySelector('.mag-kopfbild'); if (kb) kb.remove(); }
     document.body.appendChild(knopf);
     document.body.appendChild(panel);
     formularAusEinstellungen();
