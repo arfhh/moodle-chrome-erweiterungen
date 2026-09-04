@@ -1,4 +1,4 @@
-/* Moodle AI Reviewer v1.5.4
+/* Moodle AI Reviewer v1.5.5
  *
  * Schritt 1 (Ernten, nur lesend): sammelt aus der Manuellen Bewertung alle
  *   Antworten ein, die Moodle als "incorrect" bewertet hat, obwohl der
@@ -683,7 +683,11 @@ Gib „bewertungen" und „kommentare" zusammen in EINEM JSON-Block aus.
         // Anteil statt absoluter Punkte, damit die Schwelle bei 1- und 2-Punkte-Fragen
         // dasselbe bedeutet. Leere Lücken kommen unabhängig davon immer mit.
         const grenze = (max === null ? null : max * schwelleProzent / 100);
-        if ((ist !== null && grenze !== null && ist <= grenze) || leer) {
+        // Fragen ohne Textfeld (Multiple-Choice, Wahr/Falsch, Zuordnung) haben keine
+        // Luecken. includeauto=1 listet sie mit auf; ohne erfasste Antwort kann die KI
+        // kein Feedback schreiben, und leere `luecken` haben frueher das Sortieren
+        // zerlegt ("Cannot read properties of undefined (reading 'nr')").
+        if (gaps.length && ((ist !== null && grenze !== null && ist <= grenze) || leer)) {
           feedback.push({
             frage: zeile.name, qid: zeile.qid, slot: zeile.slot, qubaid,
             ist, max,
@@ -735,9 +739,12 @@ Gib „bewertungen" und „kommentare" zusammen in EINEM JSON-Block aus.
       while (q.length) await holen(q.shift());
     }));
 
-    const nachFrage = (a, b) =>
-      a.frage.localeCompare(b.frage) || (a.luecken[0].nr - b.luecken[0].nr) ||
-      a.luecken[0].antwort.localeCompare(b.luecken[0].antwort);
+    const erste = (e) => (e.luecken && e.luecken[0]) || { nr: 0, antwort: '' };
+    const nachFrage = (a, b) => {
+      const la = erste(a), lb = erste(b);
+      return a.frage.localeCompare(b.frage) || ((la.nr || 0) - (lb.nr || 0)) ||
+        String(la.antwort || '').localeCompare(String(lb.antwort || ''));
+    };
     funde.sort(nachFrage);
     feedback.sort(nachFrage);
 
@@ -1311,8 +1318,9 @@ Gib „bewertungen" und „kommentare" zusammen in EINEM JSON-Block aus.
         z.rel = 'noopener';
         z.title = 'Diesen Versuch in Moodle öffnen';
         z.appendChild(el('span', 'ce-nr', '#' + f.nr));
-        z.appendChild(el('span', 'ce-gap', 'L' + f.luecken[0].nr));
-        z.appendChild(el('span', 'ce-ans', f.luecken[0].antwort));
+        const l0 = (f.luecken && f.luecken[0]) || { nr: '?', antwort: '' };
+        z.appendChild(el('span', 'ce-gap', 'L' + l0.nr));
+        z.appendChild(el('span', 'ce-ans', l0.antwort));
         z.appendChild(el('span', 'ce-pts', f.kein_zugewinn ? 'voll' : `${f.ist} / ${f.max}`));
         liste.appendChild(z);
       });

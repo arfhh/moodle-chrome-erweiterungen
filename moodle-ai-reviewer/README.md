@@ -2,7 +2,7 @@
 
 **Findet Schülerantworten, die inhaltlich richtig sind, aber von Moodle mit 0 Punkten bewertet wurden.**
 
-Version 1.5.4 · Schwester-Erweiterung zum *Moodle AI Grader* · Lizenz: CC BY-SA 4.0
+Version 1.5.5 · Schwester-Erweiterung zum *Moodle AI Grader* · Lizenz: CC BY-SA 4.0
 
 > Der **Grader** bewertet Freitext. Der **Reviewer** sieht nach, was der Automat bei
 > frei eingetippten Antworten übersehen hat — in Cloze-Lücken wie in Kurzantwort-Fragen.
@@ -370,11 +370,20 @@ mitgeschickt — genauso, wie es beim manuellen Speichern der Fall ist.
 
 ---
 
-*Moodle AI Reviewer – Version 1.5.4 · Entwickelt von A. Spielhoff · CC BY-SA 4.0*
+*Moodle AI Reviewer – Version 1.5.5 · Entwickelt von A. Spielhoff · CC BY-SA 4.0*
 
 ---
 
 ## Änderungen
+
+**1.5.5**
+
+- Behoben: „Fehler: Cannot read properties of undefined (reading 'nr')". Mit
+  `includeauto=1` listet Moodle auch Fragen ohne Textfeld auf (Multiple-Choice,
+  Wahr/Falsch, Zuordnung). Blieben sie unter der Feedback-Schwelle, landeten sie mit
+  leerer Lückenliste in der Sammlung und ließen das Sortieren abstürzen. Solche Fragen
+  kommen jetzt gar nicht erst in die Feedback-Liste — ohne erfasste Antwort kann die KI
+  ohnehin kein Feedback schreiben. Sortierung und Panelzeile prüfen zusätzlich ab.
 
 **1.5.4**
 
