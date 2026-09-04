@@ -1030,9 +1030,10 @@ Liefere für JEDE Abgabe des Blocks einen Eintrag, auch für leere Abgaben
       <button class="mag-btn mag-btn-primary" data-tu="hpruefen">🔍 Prüfen</button>
       <div class="mag-liste" data-rolle="hliste"></div>
       <div class="mag-protokoll" data-rolle="hlog" hidden></div>
-      <div class="mag-reihe" data-rolle="hknoepfe" hidden>
-        <button class="mag-btn mag-btn-rand" data-tu="htrocken">Trockenlauf</button>
-        <button class="mag-btn mag-btn-ok" data-tu="hschreiben">In die Frage eintragen</button>
+      <div class="mag-reihe" data-rolle="hknoepfe" hidden>${KONTEXT === 'bearbeiten'
+        ? '<button class="mag-btn mag-btn-ok" data-tu="weiter">Weiter zur Antwortvorlage →</button>'
+        : '<button class="mag-btn mag-btn-rand" data-tu="htrocken">Trockenlauf</button>'
+        + '<button class="mag-btn mag-btn-ok" data-tu="hschreiben">In die Frage eintragen</button>'}
       </div>
       <details class="mag-details">
         <summary>Kein Bearbeitungsrecht? Horizont hier behalten</summary>
@@ -1051,13 +1052,24 @@ Liefere für JEDE Abgabe des Blocks einen Eintrag, auch für leere Abgaben
       <label class="mag-haken"><input type="checkbox" data-opt="afbFarben"> Farben nach AFB statt neutral</label>
       <label class="mag-haken"><input type="checkbox" data-opt="vorlagePunkte"> Punkte in der Kopfzeile</label>
       <label class="mag-haken"><input type="checkbox" data-opt="vorlageAfb"> AFB in der Kopfzeile</label>
-      <label>Vorschau</label>
+      <label>So sieht das Eingabefeld für die Lernenden aus</label>
       <div class="mag-vorschau" data-rolle="vvorschau"></div>
+      <details class="mag-details">
+        <summary>Und das steht dann im Erwartungshorizont der Frage</summary>
+        <div class="mag-vorschau" data-rolle="vhorizont"></div>
+      </details>
       <div class="mag-protokoll" data-rolle="vlog" hidden></div>
-      <button class="mag-btn mag-btn-ok" data-tu="beides">Horizont + Antwortvorlage eintragen</button>
       <div class="mag-reihe">
-        <button class="mag-btn mag-btn-klein" data-tu="kopierh">📋 nur Horizont</button>
-        <button class="mag-btn mag-btn-klein" data-tu="kopierv">📋 nur Antwortvorlage</button>
+        <button class="mag-btn mag-btn-rand" data-tu="vtrocken">Trockenlauf</button>
+        <button class="mag-btn mag-btn-ok" data-tu="beides">Beides eintragen</button>
+      </div>
+      <p class="mag-hinweis">Erwartungshorizont und Antwortvorlage gehen in <strong>einem</strong>
+      Speichervorgang in die Frage. Getrennt einzutragen wäre riskant: Nach dem ersten
+      Speichern zeigt diese Seite eine veraltete Fassung, und der zweite Schreibvorgang
+      würde den ersten wieder überschreiben.</p>
+      <div class="mag-reihe">
+        <button class="mag-btn mag-btn-klein mag-btn-grau" data-tu="kopierh">📋 nur Horizont</button>
+        <button class="mag-btn mag-btn-klein mag-btn-grau" data-tu="kopierv">📋 nur Antwortvorlage</button>
       </div>
     </div>
 
@@ -1265,7 +1277,10 @@ Liefere für JEDE Abgabe des Blocks einen Eintrag, auch für leere Abgaben
     }
     const v = R('vvorschau');
     if (v) v.innerHTML = horizontAufgaben ? baueAntwortvorlage(horizontAufgaben)
-      : '<p class="mag-hinweis">Erst im Reiter „Erwartungshorizont" die KI-Antwort einlesen.</p>';
+      : '<p class="mag-hinweis">Erst im Reiter „2 · Horizont" die Antwort der KI einlesen.</p>';
+    const vh = R('vhorizont');
+    if (vh) vh.innerHTML = horizontAufgaben ? baueHorizont(horizontAufgaben)
+      : '<p class="mag-hinweis">Noch kein Horizont eingelesen.</p>';
   }
 
   /* --- Reiter --- */
@@ -1333,6 +1348,9 @@ Liefere für JEDE Abgabe des Blocks einen Eintrag, auch für leere Abgaben
         meldung += '  ⚠ Punktsumme ' + komma(summe) + ' weicht von der Fragenpunktzahl '
                  + komma(gesamt) + ' ab — die Erweiterung rechnet sie beim Bewerten um.';
       }
+      if (KONTEXT === 'bearbeiten') {
+        meldung += '  Weiter zu „3 · Vorlage" — dort siehst du beides und trägst es ein.';
+      }
       status('hstatus', meldung);
       R('hknoepfe').hidden = false;
       hinweiseAktualisieren();
@@ -1342,17 +1360,22 @@ Liefere für JEDE Abgabe des Blocks einen Eintrag, auch für leere Abgaben
   }
 
   async function horizontSchreiben(trocken) {
-    if (!horizontAufgaben) return;
+    const imVorlagenReiter = KONTEXT === 'bearbeiten';
+    const sRolle = imVorlagenReiter ? 'vstatus' : 'hstatus';
+    if (!horizontAufgaben) {
+      return status(sRolle, 'Es liegt noch kein geprüfter Horizont vor — '
+        + 'bitte erst im Reiter „2 · Horizont" die Antwort der KI einlesen und prüfen.', true);
+    }
     const ziel = frageBearbeitenUrl();
-    if (!ziel) return status('hstatus', 'Die Adresse der Frage lässt sich hier nicht bestimmen — '
+    if (!ziel) return status(sRolle, 'Die Adresse der Frage lässt sich hier nicht bestimmen — '
       + 'bitte die Frage zum Bearbeiten öffnen.', true);
-    const log = protokoll('hlog');
+    const log = protokoll(imVorlagenReiter ? 'vlog' : 'hlog');
     const felder = { 'graderinfo[text]': baueHorizont(horizontAufgaben) };
     // Auf der Bearbeiten-Seite geht die Antwortvorlage im selben Absenden mit.
     if (KONTEXT === 'bearbeiten' && P('vorlage')) {
       felder['responsetemplate[text]'] = baueAntwortvorlage(horizontAufgaben);
     }
-    await schreibenAusfuehren(felder, trocken, log, 'hstatus');
+    await schreibenAusfuehren(felder, trocken, log, sRolle);
   }
 
   async function schreibenAusfuehren(felder, trocken, log, statusRolle) {
@@ -1571,6 +1594,8 @@ Liefere für JEDE Abgabe des Blocks einen Eintrag, auch für leere Abgaben
       stapelAufbauen();
     },
 
+    weiter:  () => zeige('vorlage'),
+    vtrocken: () => horizontSchreiben(true),
     beides:  () => horizontSchreiben(false),
     kopierh: () => horizontAufgaben
       ? kopiere(baueHorizont(horizontAufgaben), 'vstatus', 'Horizont-HTML kopiert.')
