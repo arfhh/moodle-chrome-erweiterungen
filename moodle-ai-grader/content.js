@@ -209,11 +209,14 @@
     return p;
   }
 
+  // WICHTIG: ausdruecklich `submitbutton` („Aenderungen speichern"). Der erste Knopf im
+  // Fragenformular heisst `updatebutton` („Speichern und weiter bearbeiten") — damit
+  // speichert Moodle NICHT, das Formular kommt ohne Fehlermeldung unveraendert zurueck
+  // (live belegt 04.09.2026). `cancel` darf nie mitgehen.
   async function sendeFormular(form, felder, url) {
-    // submitbutton nehmen — cancel darf auf keinen Fall mitgehen.
-    const submit = [...form.querySelectorAll('input[type=submit],button[type=submit]')]
-      .find(b => b.name && b.name !== 'cancel')
-      || [...form.elements].find(f => f.type === 'submit' && f.name && f.name !== 'cancel');
+    const knoepfe = [...form.querySelectorAll('input[type=submit],button[type=submit]')]
+      .filter(b => b.name && b.name !== 'cancel');
+    const submit = knoepfe.find(b => b.name === 'submitbutton') || knoepfe[0];
     if (submit) felder.set(submit.name, submit.value);
     const action = new URL(form.getAttribute('action') || url, url).href;
     const antwort = await fetch(action, {
@@ -222,6 +225,40 @@
       body: felder.toString()
     });
     if (!antwort.ok) throw new Error('HTTP ' + antwort.status + ' beim Speichern');
+    return antwort;
+  }
+
+  // Nach dem Speichern zeigt die ALTE id weiter den ALTEN Stand: Moodle legt eine neue
+  // Fragenversion mit neuer id an. Die neue id steht im `lastchanged` der Weiterleitung;
+  // Rueckfall ist der Fragename in der zurueckgelieferten Fragensammlung.
+  async function neueFrageUrl(antwort, fragename, altUrl) {
+    try {
+      const ziel = new URL(antwort.url || altUrl);
+      const lc = ziel.searchParams.get('lastchanged');
+      const cmid = new URL(altUrl).searchParams.get('cmid') || ziel.searchParams.get('cmid');
+      if (lc) return location.origin + '/question/bank/editquestion/question.php?id=' + lc
+                    + (cmid ? '&cmid=' + cmid : '');
+      const dok = new DOMParser().parseFromString(await antwort.clone().text(), 'text/html');
+      const e = [...dok.querySelectorAll('[data-itemtype="questionname"]')]
+        .find(x => (x.getAttribute('data-value') || '') === fragename);
+      if (e && e.getAttribute('data-itemid')) {
+        return location.origin + '/question/bank/editquestion/question.php?id='
+             + e.getAttribute('data-itemid') + (cmid ? '&cmid=' + cmid : '');
+      }
+    } catch (e) { /* Rueckfall unten */ }
+    return null;
+  }
+
+  // Vergleicht streng genug, um eine NICHT erfolgte Speicherung zu erkennen: der alte
+  // Inhalt kann genauso anfangen wie der neue (bei der Antwortvorlage passiert).
+  function inhaltPasst(gespeichert, gewollt) {
+    const norm = t => htmlZuText(t).replace(/\s+/g, ' ').trim();
+    const ist = norm(gespeichert), soll = norm(gewollt);
+    if (!ist || !soll) return false;
+    if (ist === soll) return true;
+    if (Math.abs(ist.length - soll.length) > Math.max(40, soll.length * 0.2)) return false;
+    const mitte = soll.slice(Math.floor(soll.length / 2), Math.floor(soll.length / 2) + 40);
+    return ist.includes(soll.slice(0, 40)) && (mitte.length < 20 || ist.includes(mitte));
   }
 
   /* --- Bearbeiten-Seite: graderinfo und responsetemplate in EINEM Absenden --- */
@@ -247,19 +284,21 @@
     }
     if (nurPruefen) return { bericht };
 
-    await sendeFormular(form, felder, url);
+    const fragename = (form.querySelector('[name="name"]') || {}).value || '';
+    const antwort = await sendeFormular(form, felder, url);
 
-    // Gegenprobe an einer frisch geholten Fassung
-    const kontrolle = await holeDok(url);
+    // Gegenprobe an der NEUEN Version — die alte id liefert weiter den alten Stand.
+    const zielUrl = await neueFrageUrl(antwort, fragename, url);
+    const kontrolle = await holeDok(zielUrl || url);
     const kform = [...kontrolle.forms].find(f => f.querySelector('[name="graderinfo[text]"]'));
     const ergebnis = [];
     for (const name of Object.keys(eintraege)) {
       const feld = kform && kform.querySelector('[name="' + CSS.escape(name) + '"]');
-      const drin = feld ? htmlZuText(feld.value) : '';
-      const soll = htmlZuText(eintraege[name]).slice(0, 30);
-      ergebnis.push({ feld: name, ok: !!(drin && soll && drin.includes(soll.slice(0, 20))) });
+      ergebnis.push({ feld: name, ok: !!feld && inhaltPasst(feld.value, eintraege[name]) });
     }
-    return { bericht, ergebnis };
+    return { bericht, ergebnis, neueUrl: zielUrl,
+             warnung: zielUrl ? null : 'Die neue Fragenversion war nicht auffindbar — '
+               + 'die Gegenprobe lief gegen den alten Stand und kann falsch sein.' };
   }
 
   /* ═══════════════════════════════════════════════════════════════════
@@ -587,7 +626,12 @@
   // Die Ueberschrift ist die Grenze, an der spaeter wieder zerlegt wird — sie muss
   // maschinenlesbar bleiben. Deshalb <h4> mit „Aufgabe N" am Anfang.
   function baueHorizont(aufgaben) {
-    const kopf = '<p>' + MARKER_ZEILE + '</p>';
+    // Der Zustaendigkeits-Marker wird IMMER von der Erweiterung gesetzt, nie von der KI:
+    // eine Formvorgabe setzt kein Prompt zuverlaessig durch, und der Marker entscheidet,
+    // ob der Coach die Frage anfasst. Hat die KI ihn (etwa aus einem eigenen Prompt)
+    // trotzdem in den ersten Block geschrieben, nicht doppelt setzen — wie im Coach.
+    const schonDa = (aufgaben || []).some(a => MARKER_RE.test(ersteZeile(htmlZuText(a.horizont))));
+    const kopf = schonDa ? '' : '<p>' + MARKER_ZEILE + '</p>';
     const bloecke = (aufgaben || []).map(a => {
       let inhalt = String(a.horizont || '').trim();
       if (!/<[a-z][\s\S]*>/i.test(inhalt)) {
@@ -1329,23 +1373,45 @@ Liefere für JEDE Abgabe des Blocks einen Eintrag, auch für leere Abgaben
           if (!trocken) werte.set(n, felder[n]);
         });
         if (trocken) return status(statusRolle, 'Alles vorhanden. Jetzt eintragen.');
-        await sendeFormular(form, werte, ziel);
-        log('✓ gespeichert — bitte die Frage neu laden und nachsehen.');
-        return status(statusRolle, 'Eingetragen. Gegenprobe bitte in der Frage selbst.');
+        const fragename = (form.querySelector('[name="name"]') || {}).value || '';
+        const antwort = await sendeFormular(form, werte, ziel);
+        const neu = await neueFrageUrl(antwort, fragename, ziel);
+        const kontrolle = await holeDok(neu || ziel);
+        const kform = [...kontrolle.forms].find(f => f.querySelector('[name="graderinfo[text]"]'));
+        let schlecht = 0;
+        namen.forEach(n => {
+          const feld = kform && kform.querySelector('[name="' + CSS.escape(n) + '"]');
+          const ok = !!feld && inhaltPasst(feld.value, felder[n]);
+          log((ok ? '✓ ' : '✗ ') + n + (ok ? ' eingetragen' : ' NICHT angekommen'));
+          if (!ok) schlecht++;
+        });
+        if (!neu) log('⚠ Neue Fragenversion nicht auffindbar — Gegenprobe unsicher.');
+        return status(statusRolle, schlecht
+          ? schlecht + ' Feld(er) nicht angekommen — Protokoll lesen.'
+          : 'In die Frage eingetragen und gegengeprüft.', schlecht > 0);
       }
 
       const r = await schreibeFrageFelder(felder, trocken);
       r.bericht.forEach(b => log((trocken ? '✓ ' : '') + 'Feld ' + b.feld + ' vorhanden'
         + (b.belegt ? ' (enthält schon Text!)' : '')));
       if (trocken) return status(statusRolle, 'Alles vorhanden. Jetzt eintragen.');
+      if (r.warnung) log('⚠ ' + r.warnung);
       let fehler = 0;
       (r.ergebnis || []).forEach(x => {
         log((x.ok ? '✓ ' : '✗ ') + x.feld + (x.ok ? ' eingetragen' : ' NICHT angekommen'));
         if (!x.ok) fehler++;
       });
       if (fehler) return status(statusRolle, fehler + ' Feld(er) nicht angekommen — Protokoll lesen.', true);
-      status(statusRolle, 'Eingetragen und gegengeprüft. Die Seite wird neu geladen.');
-      setTimeout(() => location.reload(), 2500);
+      // Speichern hat eine neue Fragenversion erzeugt. Die offene Seite zeigt die alte —
+      // deshalb dorthin wechseln, nicht neu laden, sonst arbeitet man am toten Stand weiter.
+      if (r.neueUrl) {
+        log('→ neue Fragenversion: ' + r.neueUrl.replace(location.origin, ''));
+        status(statusRolle, 'Eingetragen und gegengeprüft. Wechsle zur neuen Fragenversion …');
+        setTimeout(() => { location.href = r.neueUrl; }, 2500);
+      } else {
+        status(statusRolle, 'Eingetragen und gegengeprüft. Bitte die Frage neu öffnen — '
+          + 'Moodle hat beim Speichern eine neue Version angelegt.');
+      }
     } catch (e) {
       log('✗ ' + e.message);
       status(statusRolle, 'Fehler: ' + e.message, true);
