@@ -1,25 +1,16 @@
 {
   "manifest_version": 3,
   "name": "Moodle AI Grader",
-  "version": "2.30",
-  "description": "Extrahiert Moodle-Antworten, generiert KI-Prompts und trägt Bewertungen ein.",
+  "version": "3.0",
+  "description": "Erwartungshorizont und Antwortvorlage in der Frage anlegen, Klausuren mit KI-Unterstützung bewerten und Punkte samt Feedback eintragen.",
   "permissions": [
-    "activeTab",
-    "scripting",
     "storage"
   ],
-  "host_permissions": [
-    "https://*/*",
-    "http://*/*"
-  ],
-  "background": {
-    "service_worker": "background.js"
-  },
   "content_scripts": [
     {
       "matches": [
-        "https://*/*",
-        "http://*/*"
+        "*://*/*mod/quiz/report.php*",
+        "*://*/*question/bank/editquestion/question.php*"
       ],
       "js": [
         "content.js"

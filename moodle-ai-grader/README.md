@@ -1,304 +1,164 @@
-# Moodle AI Grader – Browser-Erweiterung für Chrome
+# Moodle AI Grader
 
-**KI-gestützte Bewertung von Schülerantworten direkt in Moodle**
+**Version 3.0** · Chrome-Erweiterung (Manifest V3)
+Entwickelt von **T. Henken & A. Spielhoff** · Lizenz **CC BY-SA 4.0**
 
-Entwickelt von T. Henken & A. Spielhoff · Lizenz: CC BY-SA 4.0 · Version 2.30
+Bewertet Klausuren mit mehreren Aufgaben in **einer** Moodle-Freitextfrage: legt den
+Erwartungshorizont und die Antwortvorlage in der Frage an, erzeugt daraus den
+Bewertungsauftrag für einen KI-Chat und trägt Punkte und begründetes Feedback zurück
+in Moodle ein.
 
----
-
-## Was macht diese Erweiterung?
-
-Der Moodle AI Grader ist eine Chrome-Erweiterung, die Lehrkräfte bei der Bewertung von Freitextantworten in Moodle unterstützt. Das Plugin führt **keine eigene KI-Inferenz** durch – es erzeugt strukturierte Prompts, die du in eine externe KI (z. B. ChatGPT, Claude) einfügst, und trägt die zurückgegebenen JSON-Bewertungen automatisch in Moodle ein.
-
-Der Workflow läuft in zwei Stufen:
-
-**Stufe 1 – Bewertungshorizont erstellen**
-Die Erweiterung liest alle Aufgaben und Maximalpunkte aus Moodle aus und generiert einen Prompt für die KI. Die KI führt dich Schritt für Schritt durch die Erstellung eines vollständigen Bewertungshorizonts mit Punkteverteilung, Operatorenzuordnung und AFB-Einstufung und erzeugt daraus am Ende einen fertigen Korrektur-Prompt.
-
-**Stufe 2 – Schülerantworten bewerten**
-Der fertige Bewertungshorizont wird zusammen mit den Schülerantworten – aufgeteilt in Batches – an die KI übergeben. Die KI bewertet jeden Schülertext und gibt Punkte sowie individuelles Feedback als JSON zurück. Die Erweiterung prüft, validiert und trägt alles in Moodle ein.
+Die Erweiterung greift **nicht selbst auf eine KI zu**. Sie erzeugt Prompts, die du in
+ChatGPT, Claude oder einen anderen Chat einfügst, und liest die Antwort wieder ein.
 
 ---
 
-## Voraussetzungen
+## Was in Version 3 anders ist
 
-- Google Chrome (Version 100 oder neuer)
-- Zugang zu einer Moodle-Instanz mit Lehrkraft-Rechten
-- Ein Account bei einer KI deiner Wahl (ChatGPT, Claude, Perplexity o. ä.)
+| | v2 | v3 |
+|---|---|---|
+| Erwartungshorizont | im Plugin gespeichert | **in der Frage** (Moodle-Feld „Information zur Bewertung") |
+| Punkte und Abzüge | die KI rechnet | **die Erweiterung rechnet** |
+| Antwortvorlage | — | wird mit angelegt, gliedert die Abgabe je Aufgabe |
+| Wirkt auf | jede Seite | nur Bewertungsseite **und** Frage-Bearbeiten |
+| Berechtigungen | „alle Daten auf allen Websites" | nur `storage` |
+| Sicherheitsnetze | Warnung vor dem Eintragen | Prüfen · Trockenlauf · Gegenprobe |
+
+**Warum die Erweiterung rechnet:** Sprachmodelle beurteilen Sprache zuverlässig, rechnen
+aber unzuverlässig. In einer früheren Fassung bestätigte die KI in der Tabelle 75 % und
+schrieb anschließend die volle Punktzahl ins JSON. Seit die Rechnung im Code liegt, kann
+das nicht mehr passieren.
 
 ---
 
 ## Installation
 
-Die Erweiterung wird direkt aus einem Ordner auf deinem Computer geladen – kein Chrome Web Store nötig.
+1. Repo herunterladen (**Code → Download ZIP**) und entpacken.
+2. In Chrome `chrome://extensions/` öffnen, **Entwicklermodus** einschalten.
+3. **Entpackte Erweiterung laden** → den Ordner `moodle-ai-grader` auswählen.
 
-### Schritt 1 – ZIP entpacken
+Beim Update genügt „↺ neu laden" — der Ordnername bleibt ohne Versionsnummer.
 
-Entpacke die Datei `moodle-ai-grader-V2.29.zip` (Doppelklick). Es entsteht ein
-Ordner `moodle-ai-grader` mit dieser Struktur:
-
-```
-moodle-ai-grader/
-├── manifest.json
-├── background.js
-├── content.js
-├── style.css
-└── icons/
-    ├── icon16.png
-    ├── icon32.png
-    ├── icon48.png
-    └── icon128.png
-```
-
-Lege den Ordner an einen festen Platz, den du nicht mehr verschiebst
-(z. B. `Dokumente/moodle-ai-grader`). Die Versionsnummer steht bewusst **nicht**
-im Ordnernamen: Bei einem Update genügt so ein Klick auf „↺ neu laden" in
-`chrome://extensions/`, statt die Erweiterung erneut hinzuzufügen.
-
-### Schritt 2 – Erweiterung in Chrome laden
-
-1. Öffne Chrome und gib in die Adressleiste ein: `chrome://extensions/`
-2. Aktiviere oben rechts den Schalter **Entwicklermodus**
-3. Klicke auf **Entpackte Erweiterung laden**
-4. Wähle den Ordner `moodle-ai-grader` aus
-5. Die Erweiterung erscheint in der Liste ✅
-
-> Verschiebe oder benenne den Ordner nach der Installation nicht um. Chrome lädt die Erweiterung immer aus diesem Ordner.
+Beim Installieren fragt Chrome nur nach Zugriff auf die Bewertungs- und die
+Fragen-Bearbeiten-Seite deines Moodle. Die Warnung „alle Daten auf allen Websites" gibt es
+seit Version 3 nicht mehr.
 
 ---
 
-## Einstellungen konfigurieren ⚙️
+## Ablauf
 
-Bevor du mit der Bewertung beginnst, trage deine Kursparameter ein. Klicke dazu auf das **Zahnrad-Symbol** im Panel-Header.
+### 1 · Vor der Klausur — Erwartungshorizont und Antwortvorlage anlegen
 
-| Einstellung | Beschreibung |
-|---|---|
-| Fach | z. B. Chemie, Deutsch, Geschichte |
-| Jahrgang / Klassenstufe | Bestimmt die Anrede im Feedback (bis Klasse 10: „Du hast …", ab Klasse 11: „Sie haben …"). Eine Live-Vorschau zeigt die gewählte Anrede an. |
-| Kursniveau | G = Gymnasial, M = Mittel, E = Einfach |
-| Punkteschritte | 0,1 / 0,5 / 1,0 |
-| Rechtschreibgewichtung | 0–30 % in 5 %-Schritten (Anteil der **Gesamtpunktzahl**, nicht je Aufgabe) |
-| Feedbacklänge | Kurz / Mittel / Ausführlich / Umfangreich |
-| Quellenangaben entfernen | Entfernt automatisch KI-Quellenangaben wie `[web:1]` aus dem Feedback |
-| KI-Kommentar einfügen | Hängt einen Transparenzhinweis ans Feedback an (siehe unten) |
+Frage in der Fragensammlung zum **Bearbeiten** öffnen. Rechts erscheint der Knopf **AI**.
 
-Die Einstellungen werden dauerhaft gespeichert und beim nächsten Start automatisch geladen.
+1. Reiter **Erwartungshorizont** → „📋 Prompt kopieren".
+2. In den KI-Chat einfügen. Die KI zerlegt die Aufgabenstellung in Teilaufgaben, schlägt
+   Operator, AFB-Stufe, Punkte und den Erwartungshorizont vor und fragt nach, bis es passt.
+3. Den JSON-Block der KI in das Feld einfügen → **🔍 Prüfen**. Je Aufgabe erscheint ein
+   Textfeld; du kannst jeden Horizont noch ändern.
+4. Reiter **Antwortvorlage** → Vorschau ansehen, dann **Horizont + Antwortvorlage eintragen**.
 
-> **Hinweis zum Prompt-Editor:** Wenn du die Einstellungen speicherst, werden eventuell vorhandene **eigene Prompt-Anpassungen zurückgesetzt**, damit die geänderten Parameter sicher in den Prompt übernommen werden. Passe den Prompt also erst nach den Grundeinstellungen an.
+Beides wird in **einem** Speichervorgang geschrieben und danach gegengeprüft.
 
-### KI-Transparenzhinweis
+**Die Antwortvorlage** wird den Lernenden beim Öffnen der Frage in das Eingabefeld geladen:
+je Aufgabe eine Kopfzeile mit Nummer, AFB-Stufe, Schlagwort und Punktzahl, darunter Platz
+zum Schreiben. Sie gibt der Klasse Struktur — und erlaubt der Erweiterung später, die
+Abgabe verlässlich Aufgabe für Aufgabe zu zerlegen.
 
-Ist die Option **„KI-Kommentar einfügen"** aktiv, ergänzt das Plugin jedes eingetragene Feedback automatisch um folgenden Hinweis (kursiv, kleine Schrift):
+### 2 · Nach der Klausur — bewerten
 
-> *Dieses Feedback wurde von der Lehrkraft mithilfe von KI-Unterstützung erstellt und geprüft.*
+**Test → Ergebnisse → Manuelle Bewertung**, dann den Knopf **AI**.
 
----
+1. Reiter **Korrektur**. Die Erweiterung schlägt vor, wie viele Abgaben in einen Durchgang
+   passen — hergeleitet aus der tatsächlichen Textlänge, nicht aus einer festen Zahl.
+2. „📋 Prompt kopieren" → in den KI-Chat → Antwort zurück in das Feld → **🔍 Prüfen**.
+3. Je Abgabe erscheint eine Zeile mit alter und neuer Punktzahl, den Prozentwerten je
+   Aufgabe und der Fehlerdichte. Das Feedback lässt sich vorher noch bearbeiten.
+4. **Trockenlauf** prüft, ob jedes Punkte- und Kommentarfeld wirklich auf der Seite steht.
+   Das fängt den häufigsten Fehler ab: ein JSON aus einem anderen Auslese-Durchlauf.
+5. **Alle eintragen.** Danach lädt die Erweiterung die Seite erneut und vergleicht jeden
+   gespeicherten Wert mit dem gewollten. Es wird nichts als Erfolg gemeldet, was nicht
+   wirklich angekommen ist.
 
-## Workflow: Erste Bewertung Schritt für Schritt
-
-### Panel öffnen
-
-Navigiere in Moodle zur manuellen Bewertungsseite einer Freitextaufgabe (Quiz → Ergebnisse → Manuelle Bewertung). Das Plugin-Icon (🪄) erscheint automatisch oben rechts, sobald die Erweiterung eine Bewertungsseite erkennt. Klicke darauf, um das Panel zu öffnen.
-
-> Das Panel erscheint nur auf Seiten mit Freitext- oder Kurzantwort-Bewertungsfeldern. Bei reinen Multiple-Choice-Seiten bleibt es unsichtbar.
-
-> **Tipp – Pagination:** Moodle zeigt standardmäßig nur 20–30 Schüler pro Seite. Stelle „Fragen pro Seite" möglichst auf „Alle", damit alle Antworten erfasst werden. Das Batch-System hilft zusätzlich, große Gruppen aufzuteilen.
-
----
-
-### Tab 1 – Bewertungshorizont 📋
-
-**Schritt 1 – Prompt für Bewertungshorizont kopieren**
-
-Klicke auf **„Prompt für Bewertungshorizont kopieren"**. Die Erweiterung liest alle Aufgaben und Maximalpunkte aus Moodle aus und kopiert einen vollständigen Prompt in deine Zwischenablage. Mit dem ✏️-Button daneben kannst du den Prompt-Text vorher anpassen.
-
-Öffne nun die KI deiner Wahl und füge den Prompt mit Strg+V ein. Die KI begrüßt dich, zeigt die übernommenen Einstellungen zur Bestätigung und führt dich durch den Prozess:
-
-- Bestätige die Parameter mit **JA** oder passe einzelne Punkte an
-- Die KI erstellt den Bewertungshorizont **Aufgabe für Aufgabe einzeln** – mit Punkteverteilung, Operator und AFB-Zuordnung
-- Passe jede Aufgabe an, bis sie passt, und bestätige
-- Am Ende generiert die KI einen fertigen Korrektur-Prompt als **Markdown-Codeblock**
-
-**Schritt 2 – Bewertungshorizont einfügen**
-
-Kopiere den fertigen Korrektur-Prompt (den Markdown-Codeblock) aus dem KI-Chat und füge ihn in das Textfeld unter Schritt 2 ein. Der Text bleibt über Seitenwechsel hinweg gespeichert. Mit dem 🗑️-Button kannst du das Feld bei Bedarf leeren.
-
-**Schritt 3 – Weiter zur Korrektur**
-
-Klicke auf **„→ Zum Korrektur-Tab"**. Ist das Textfeld leer, erscheint eine Sicherheitsabfrage.
+Fehlt der Erwartungshorizont, springt die Erweiterung von selbst in den Horizont-Reiter —
+er lässt sich auch hier noch nachtragen.
 
 ---
 
-### Tab 2 – Korrektur ✅
+## Bewertungsmaßstab
 
-**Schritt 4 – Batch-Größe wählen**
+**Inhalt.** Die KI vergibt je Aufgabe einen Erfüllungsgrad in den Stufen
+100 / 75 / 50 / 25 / 0 Prozent und verankert ihn am hinterlegten Erwartungshorizont.
+Punkte, Rundung und Summe rechnet die Erweiterung.
 
-Das Plugin teilt die Schülerantworten in Batches auf, damit das KI-Kontextfenster nicht überläuft. Die empfohlene Batch-Größe wird automatisch je nach Feedbacklänge vorgeschlagen:
+**Sprache — als Abzug, nicht als zweiter Topf.** Ein inhaltsleerer, aber sauber
+geschriebener Text bekäme sonst allein für die Form Punkte. Der Höchstabzug ist ein
+Prozentsatz der **Gesamtpunktzahl**, nicht je Aufgabe, und wird proportional verteilt.
 
-| Feedbacklänge | Schüler/Batch |
-|---|---|
-| Kurz | 30 |
-| Mittel | 15 |
-| Ausführlich | 10 |
-| Umfangreich | 6 |
+Gestaffelt wird nach **Fehlern je 100 Wörtern**:
 
-Du kannst die Größe jederzeit über das Dropdown ändern. Mit **„📋 Rohdaten"** kopierst du die reinen Daten (Aufgaben + Schülerantworten) als JSON ohne Prompt.
+| Strenge | kein Abzug | ⅓ | ⅔ | voll |
+|---|---|---|---|---|
+| mild | bis 1,5 | bis 3,0 | bis 5,0 | darüber |
+| normal | bis 1,0 | bis 2,0 | bis 3,5 | darüber |
+| streng | bis 0,5 | bis 1,5 | bis 2,5 | darüber |
 
-**Schritt 5 – Batches kopieren & in KI einfügen**
+Unter 40 Wörtern greift eine Dichte nicht — dort zählt die absolute Fehlerzahl.
+Bei „keine" wird kein Punkt abgezogen, das Sprachfeedback aber trotzdem geschrieben.
+Schwere Fehler (Satz ohne Prädikat, abgebrochener Satz, Satzbau zum zweimal Lesen)
+zählen doppelt.
 
-Für jeden Batch erscheint ein eigener Button, z. B. **„Batch 1 kopieren (Schüler 1–10)"**. Der Ablauf:
+**Operatoren** fließen immer in die Bewertung ein. Einen eigenen Abschnitt
+„Operatorerfüllung" im Feedback bekommt nur die Stufe „Umfangreich"; bei „Ausführlich"
+steht die Operatorverfehlung im laufenden Begründungstext.
 
-1. Klicke auf **Batch 1 kopieren** und füge den Prompt in einen neuen KI-Chat ein
-2. Die KI fragt zunächst, ob du jede Bewertung einzeln prüfen möchtest, und gibt dann das JSON aus – umrahmt von Markierungen wie `=== BATCH 1 ===` … `=== ENDE BATCH 1 ===`
-3. Kopiere die KI-Antwort in das Feld unter Schritt 6
-4. Kopiere den nächsten Batch und wiederhole
-
-Mit **„✏️ Prompt anpassen"** kannst du den Korrektur-Prompt vor dem Kopieren bearbeiten.
-
-**Schritt 6 – Alle JSON-Antworten einfügen**
-
-Füge alle KI-Antworten nacheinander in das große Textfeld ein. Die Batch-Markierungen helfen dem Plugin, die einzelnen Blöcke zu erkennen. Klicke dann auf **„🔍 Validieren & prüfen"**. Das Plugin prüft:
-
-- **Vollständigkeit** – sind alle Schüler-IDs von 0 bis N vorhanden?
-- **Lücken** – fehlende IDs werden namentlich gemeldet (z. B. fehlt noch ein Batch)
-- **Duplikate** – doppelt vergebene IDs werden angezeigt
-
-Erst nach erfolgreicher Validierung werden die Buttons in Schritt 7 freigeschaltet.
-
-**Schritt 7 – Bewertungen eintragen**
-
-Du hast zwei Möglichkeiten:
-
-| Option | Wann sinnvoll? |
-|---|---|
-| **Review starten** | Du möchtest jede Bewertung einzeln prüfen (empfohlen) |
-| **Alle eintragen** | Du vertraust der KI-Bewertung und willst schnell sein |
-
-Im **Review-Modus** siehst du für jeden Schüler:
-
-- die Schülerantwort im Original,
-- die KI-Begründung mit Punkteaufschlüsselung je Aufgabe (nur für dich sichtbar),
-- die vorgeschlagenen Punkte (bearbeitbar),
-- das Feedback an den Schüler (bearbeitbar).
-
-Klicke auf **„✅ Eintragen & Weiter"** oder **„Überspringen"**, um zur nächsten Antwort zu gelangen.
-
-> **Sicherheitswarnung:** Hat die KI die Bewertungen **ohne** interaktive Prüfung erstellt (`reviewed: false`), erscheint bei „Alle eintragen" eine Warnung. Du kannst dann den Review starten, trotzdem eintragen oder abbrechen. KI-Bewertungen können Fehler enthalten – prüfe sie im Zweifel.
-
-Nach dem Eintragen aller Bewertungen klickst du in Moodle wie gewohnt auf **„Änderungen speichern"**.
+**Jede Aufgabe bekommt eine Begründung** — auch eine mit voller Punktzahl.
 
 ---
 
-## Prompt-Texte anpassen ✏️
+## Einstellungen (⚙)
 
-Beide Prompts (Bewertungshorizont und Korrektur) lassen sich direkt im Panel bearbeiten. Klicke dazu auf den ✏️-Button neben dem jeweiligen Bereich.
+Fach · Jahrgang (ab 11 wird gesiezt) · Kursniveau · Punkteschritte ·
+Rechtschreibung (Höchstabzug in % und Strenge) · Feedbacklänge ·
+KI-Transparenzhinweis · Quellenangaben entfernen.
 
-- Der vollständige Prompt-Text ist lesbar und bearbeitbar
-- Ein oranger Hinweis erscheint, wenn der Prompt vom Original abweicht
-- Mit **„↺ Original"** stellst du den Original-Prompt wieder her
-- Änderungen werden dauerhaft gespeichert
-
-Die Platzhalter `[MOODLE_AUFGABEN_DATEN]` und `[MOODLE_SCHÜLER_DATEN]` werden beim Kopieren automatisch mit den echten Daten aus Moodle befüllt.
-
-> Beachte: Beim Speichern der **Grundeinstellungen** werden eigene Prompt-Anpassungen zurückgesetzt, damit Parameteränderungen wirksam werden.
+Die Werte werden **nicht** nur in den Prompt geschrieben, sondern von der Erweiterung
+angewandt. Wer den Prompt selbst anpassen will, kann ihn über ✏️ überschreiben;
+beim Speichern der Grundeinstellungen werden eigene Prompts zurückgesetzt, damit keine
+veralteten Parameter eingebettet bleiben.
 
 ---
 
-## Feedbacklängen im Überblick
+## Ohne Antwortvorlage und ohne Kartendesign
 
-| Länge | Struktur |
-|---|---|
-| **Kurz** | Eine Zeile je Aufgabe mit Symbol (✓ ✗ ⚠) + Endpunktzahl |
-| **Mittel** | 2–3 Sätze je Aufgabe + Punkte + kurze Rechtschreibanmerkung |
-| **Ausführlich** | Positive Aspekte → Aufgaben (mit Punkten) → Rechtschreibung & Grammatik → Zusammenfassung → Endpunktzahl |
-| **Umfangreich** | Wie Ausführlich, zusätzlich Kriterienanalyse, Formulierungsbeispiele und Stilanalyse (Oberstufe) |
+Die Erweiterung setzt **nichts** davon voraus. Sie erkennt selbst, was sie vorfindet:
 
-Der **Rechtschreibabzug** wird je Aufgabe nur angezeigt, wenn er größer als 0 ist. Der maximale Abzug bezieht sich immer auf die **Gesamtpunktzahl**, nicht auf einzelne Aufgaben.
+1. **Gegliederte Abgabe** → zerlegt je Aufgabe. Bester Fall.
+2. **Keine Gliederung, aber Horizont** → die ganze Abgabe geht am Stück an die KI.
+3. **Kein Horizont** → die Erweiterung bietet an, einen zu erzeugen.
 
----
+Die Antwortvorlage wird standardmäßig **neutral** gestaltet; die Farblogik nach
+AFB-Stufen ist eine Option.
 
-## Wer ist zuständig — Coach oder Grader?
-
-Schreibst du einen Test, in dem **kurze** Freitextfragen (zwei, drei Sätze) und
-**längere** Freitextaufgaben nebeneinander vorkommen — womöglich noch als
-Zufallsfragen aus einem Pool —, dann stehen zwei Erweiterungen vor derselben Frage.
-Der Coach arbeitet die Übersichtsseite ab und würde ohne Kennzeichnung **alle**
-Freitextfragen bewerten, auch die, die dem Grader gehören.
-
-Geklärt wird das in der Frage selbst. Die **erste Zeile des Erwartungshorizonts**
-(Moodle-Feld *Information für Bewerter/innen*, technisch `graderinfo`) trägt einen
-Marker:
-
-```
-[moodle-ai-coach]
-Erwartungshorizont
-Kernaussage: …
-```
-
-Warum dort und nicht als Auswahl in der Erweiterung: Der Marker steht **in der Frage**.
-Er wird einmal beim Bauen gesetzt und wirkt danach in jedem Test, bei jedem Kollegen,
-auch wenn die Frage aus einem Zufallspool gezogen wird. Eine Auswahlliste müsstest du
-bei jedem Durchlauf neu setzen — und bei Zufallsfragen weißt du vorher gar nicht,
-welche Fragen kommen. Kosten entstehen keine: Beide Erweiterungen lesen den
-Erwartungshorizont ohnehin, der Marker fährt einfach mit.
-
-Erkannt wird die Zeile großzügig — mit und ohne eckige Klammern, mit Leer- statt
-Bindestrich, und mit weiterem Text dahinter. Im Prompt an die KI taucht der Marker
-nicht auf; er wird vorher herausgenommen.
-
-| Erwartungshorizont | Coach | Grader |
-|---|---|---|
-| `[moodle-ai-coach]` … | bewertet | weist darauf hin, bewertet auf Wunsch trotzdem |
-| `[moodle-ai-grader]` … | überspringt | bestätigt kurz |
-| Horizont da, kein Marker | bewertet **und meldet es** | sagt nichts |
-| leer | bewertet nicht | rät, erst einen Horizont anzulegen |
-
-**Wenn der Horizont leer ist**, ist die Reihenfolge: erst im Grader (Tab 1) den
-Bewertungshorizont erzeugen und in die Frage eintragen — dabei wird der Marker
-automatisch gesetzt —, danach lässt der Coach die Frage in Ruhe.
-
-**Bestandsfragen** haben den Marker noch nicht. Deshalb bewertet der Coach eine Frage
-mit Horizont, aber ohne Marker vorerst mit und listet sie danach auf; ein Knopf trägt
-den Marker in einem Rutsch nach. Ist dein Bestand durch, setzt du in den Einstellungen
-das Häkchen **„Nur Fragen bewerten, die [moodle-ai-coach] tragen"** — dann ist jede
-unmarkierte Frage tabu.
-
-## Datenschutz & Sicherheit
-
-- Die Erweiterung sendet keine Daten an externe Server. Alle Verarbeitung läuft lokal im Browser.
-- Schülerantworten werden nur dann in die Zwischenablage kopiert, wenn du aktiv auf einen Kopieren-Button klickst.
-- **Namen werden automatisch anonymisiert** (erkannte Anreden wie „Hallo Maria" werden durch `[ANONYMISIERT]` ersetzt), bevor sie in einen Prompt gelangen. Diese Anonymisierung ist immer aktiv und nicht abschaltbar.
-- Auf Wunsch hängt das Plugin einen Transparenzhinweis ans Feedback an (Option „KI-Kommentar einfügen").
-- Welche Daten du an eine KI sendest, liegt in deiner Verantwortung. Beachte die Datenschutzrichtlinien deiner Schule sowie die Nutzungsbedingungen des jeweiligen KI-Dienstes.
+Wer in seinem Moodle keine Fragen bearbeiten darf, kann den Horizont stattdessen in der
+Erweiterung ablegen — im Reiter „Erwartungshorizont" ganz unten.
 
 ---
 
-## Fehlerbehebung
+## Datenschutz
 
-| Problem | Lösung |
-|---|---|
-| Plugin-Icon erscheint nicht | Seite mit Strg+Shift+R neu laden; Erweiterung in `chrome://extensions/` neu laden (↺) |
-| „Antwort nicht extrahierbar" | Prüfe, ob du auf der richtigen Moodle-Bewertungsseite bist (Manuelle Bewertung, nicht Übersicht) |
-| Punkte werden eingetragen, Feedback aber nicht | Warte, bis die Seite vollständig geladen ist, bevor du einträgst (TinyMCE muss bereit sein) |
-| „Ungültiges JSON" | Kopiere den gesamten Codeblock aus der KI – inklusive der ` ```json ` und ` ``` ` Zeilen |
-| „Fehlende IDs" bei der Validierung | Es fehlt ein Batch – füge die fehlende KI-Antwort ins JSON-Feld ein und validiere erneut |
-| „Doppelte IDs" bei der Validierung | Eine Antwort wurde doppelt eingefügt – entferne das Duplikat |
-| KI-Kontextfenster läuft über | Batch-Größe in Schritt 4 reduzieren (besonders bei „Umfangreich") |
-| Erweiterung nach Chrome-Update weg | Chrome deaktiviert entpackte Erweiterungen manchmal nach Updates → in `chrome://extensions/` erneut aktivieren |
-| Icon-Dateien fehlen | Prüfe, ob der `icons/`-Unterordner mit allen 4 PNG-Dateien im Erweiterungsordner liegt |
+- **Keine Schülernamen** werden ausgelesen oder kopiert; zur Zuordnung dient nur die
+  laufende Nummer der Abgabe auf der Seite.
+- Die Erweiterung sendet nichts an fremde Server. Sie liest Seiten deiner eigenen
+  Moodle-Instanz mit deiner bestehenden Anmeldung.
+- Daten verlassen den Browser erst, wenn du selbst auf „Prompt kopieren" klickst.
+- Kein Zugriff auf Seiten-JavaScript, kein Hintergrunddienst, keine Netzwerkrechte
+  außerhalb deines Moodle.
 
----
+## Grenzen
 
-## Dateiübersicht
-
-| Datei | Beschreibung |
-|---|---|
-| `manifest.json` | Konfigurationsdatei der Erweiterung (Version, Berechtigungen, Icons) |
-| `background.js` | Hintergrunddienst (Service Worker), der Feedback über TinyMCE in Moodle einträgt |
-| `content.js` | Hauptlogik: UI, Extraktion, Prompt-Generierung, Batch-System, Validierung, Eintragen |
-| `style.css` | Styling des Panels, der Tabs, Buttons und Dialoge |
-| `icons/` | Plugin-Icons in den Größen 16, 32, 48 und 128 px |
-
----
-
-*Moodle AI Grader – Version 2.30 · Entwickelt von T. Henken & A. Spielhoff · CC BY-SA 4.0*
+- Eine Moodle-Freitextfrage je Bewertungsseite. Für Kurztests mit Zufallsfragen ist der
+  **Moodle AI Coach** zuständig, für Cloze-Lücken der **Moodle AI Reviewer**.
+- Die Erweiterung ändert nichts an Fragen, die sie nicht kennt: Geschrieben wird nur, was
+  du im Trockenlauf gesehen und dann bestätigt hast.
+- Anhänge und Dateiabgaben werden nicht gelesen.

@@ -1,1449 +1,1517 @@
+/* Moodle AI Grader v3 — content.js
+ *
+ * Wirkt auf zwei Seiten:
+ *   A) Bewertungsseite   mod/quiz/report.php               → Reiter Korrektur + Horizont
+ *   B) Bearbeiten-Seite  question/bank/editquestion/…      → Reiter Horizont + Antwortvorlage
+ *
+ * Grundsaetze (siehe Projektdokumentation):
+ *   - Der Erwartungshorizont steht in der FRAGE (Moodle-Feld graderinfo), nicht im Plugin.
+ *   - Die ERWEITERUNG RECHNET, die KI beurteilt nur. Sie liefert Prozente je Aufgabe und
+ *     eine gezaehlte Fehlerliste; Punkte, Rundung und Rechtschreibabzug rechnet der Code.
+ *   - Kein Zugriff auf Seiten-JavaScript: kein background.js, kein world:'MAIN',
+ *     keine host_permissions. Geschrieben wird ueber fetch des Formulars + Absenden.
+ *   - Projekteigene Konventionen (AFB-Kartendesign, Antwortvorlage) sind eine
+ *     VERBESSERUNG, nie eine VORAUSSETZUNG. Drei Stufen, siehe zerlegeAbgabe().
+ *
+ * © 2026 T. Henken & A. Spielhoff — CC BY-SA 4.0
+ */
 (function () {
-
-    // ── SEITEN-CHECK ──
-    function isMoodleGradingPage() {
-        const markInputs = document.querySelectorAll('input[id$="-mark"]');
-        if (markInputs.length === 0) return false;
-        const hasEssay   = document.querySelector('.qtype_essay_response, [class*="essay"][class*="response"]');
-        const hasShort   = document.querySelector('.answer input[type="text"][readonly]');
-        const hasAblock  = document.querySelector('.ablock');
-        const hasComment = document.querySelector('textarea[id$="-comment_id"]');
-        return !!(hasEssay || hasShort || hasAblock || hasComment);
-    }
-
-    if (!isMoodleGradingPage()) return;
-
-    // ── ZUSTAENDIGKEIT: COACH ODER GRADER? ──
-    // In einem Test koennen Freitextfragen fuer den Grader (laengere Antworten) und
-    // fuer den Moodle AI Coach (2-3 Saetze) nebeneinander liegen. Wer eine Frage
-    // bewerten soll, steht als Marker in der ERSTEN Zeile des Bewertungshorizonts in
-    // der Frage selbst (Moodle-Feld graderinfo), z. B. „[moodle-ai-coach]".
-    // Der Grader SPERRT nichts — er sagt nur Bescheid, denn wer eine Frage bewusst
-    // selbst bewerten will, soll das koennen.
-    const MAG_MARKER_RE = /^\s*[\[(]?\s*moodle[-\s]?ai[-\s]?(coach|grader)\s*[\])]?\s*[:.\u2013-]?\s*/i;
-
-    function magZustaendigkeit() {
-        const gi = document.querySelector('.que .graderinfo, .graderinfo');
-        if (!gi) return { horizont: false, wer: null };
-        const zeile = (gi.innerText || '').split('\n').map(s => s.trim()).find(Boolean) || '';
-        const m = zeile.match(MAG_MARKER_RE);
-        return { horizont: !!zeile, wer: m ? m[1].toLowerCase() : null };
-    }
-
-    // ── STANDARD-EINSTELLUNGEN ──
-    const defaultSettings = {
-        // Allgemeine Parameter (Zahnrad-Menü)
-        fach:             '',
-        jahrgang:         '',
-        kursniveau:       'G',
-        punkteschritte:   '0.1',
-        rechtschreibung:  '10',
-        feedbacklaenge:   'Ausführlich',
-        // Optionen
-        anonymize:        true, // immer aktiv – Namen werden nie an die KI übertragen
-        removeCitations:  true,
-        // KI-Transparenzhinweis
-        kiHinweis: true,
-        // Benutzerdefinierte Prompt-Overrides (null = Original verwenden)
-        promptHorizont:  null,
-        promptKorrektur: null
-    };
-
-    let appSettings = JSON.parse(JSON.stringify(defaultSettings));
-    let reviewData  = [];
-    let reviewIndex = 0;
-    let activeTab   = 'horizont'; // 'horizont' | 'korrektur'
-
-    // ── HILFSFUNKTIONEN ──
-    function cleanCitations(text) {
-        if (!text) return '';
-        if (!appSettings.removeCitations) return text;
-        return text.replace(/\[\w+:\d+\]/g, '').replace(/  +/g, ' ').trim();
-    }
-
-    function formatPoints(val) {
-        return String(val).replace('.', ',');
-    }
-
-    function getAnrede() {
-        const jg = parseInt(appSettings.jahrgang, 10);
-        if (!isNaN(jg) && jg >= 11) return 'Sie haben';
-        return 'Du hast';
-    }
-
-    // ── MOODLE FELDER BEFÜLLEN ──
-    function writeToMoodle(id, points, feedback) {
-        const markInputs        = document.querySelectorAll('input[id$="-mark"]');
-        const feedbackTextareas = document.querySelectorAll('textarea[id$="-comment_id"]');
-        if (!markInputs[id] || !feedbackTextareas[id]) return false;
-
-        const markInput = markInputs[id];
-        markInput.value = formatPoints(points);
-        markInput.dispatchEvent(new Event('input',  { bubbles: true }));
-        markInput.dispatchEvent(new Event('change', { bubbles: true }));
-
-        const kiSatz = appSettings.kiHinweis !== false
-            ? '<p><em><small>Dieses Feedback wurde von der Lehrkraft mithilfe von KI-Unterstützung erstellt und geprüft.</small></em></p>'
-            : '';
-        const cleanFeedback = cleanCitations(feedback);
-        const textareaId    = feedbackTextareas[id].id;
-        // \n in HTML-Absätze umwandeln damit TinyMCE die Formatierung behält
-        const htmlFeedback  = cleanFeedback
-            .split(/\n\n+/)
-            .map(block => `<p>${block.replace(/\n/g, '<br>')}</p>`)
-            .join('') + kiSatz;
-        chrome.runtime.sendMessage({
-            action:      'setTinyMCE',
-            textareaId:  textareaId,
-            htmlContent: htmlFeedback
-        });
-        return true;
-    }
-
-    // ── DOM EXTRAKTION ──
-    function getContainer(markInput) {
-        let el = markInput;
-        for (let i = 0; i < 12; i++) {
-            el = el.parentElement;
-            if (!el) return null;
-            if (el.classList.contains('que') || el.classList.contains('content')) return el;
-        }
-        return null;
-    }
-
-    function getStudentAnswerFromDOM(index) {
-        const markInputs = document.querySelectorAll('input[id$="-mark"]');
-        if (!markInputs[index]) return '- Feld nicht gefunden -';
-        const c = getContainer(markInputs[index]);
-        if (!c) return '- Container nicht gefunden -';
-
-        const essay   = c.querySelector('.qtype_essay_response');
-        if (essay && essay.innerText.trim()) return essay.innerText.trim();
-        const shortRO = c.querySelector('input[type="text"][readonly]');
-        if (shortRO && shortRO.value.trim()) return shortRO.value.trim();
-        const anyInput = c.querySelector('.answer input[type="text"]');
-        if (anyInput && anyInput.value.trim()) return anyInput.value.trim();
-        const textbox = c.querySelector('[role="textbox"]');
-        if (textbox && textbox.innerText.trim()) return textbox.innerText.trim();
-        const ablock  = c.querySelector('.ablock');
-        if (ablock && ablock.innerText.trim()) return ablock.innerText.substring(0, 400).trim();
-        return '- Antwort nicht extrahierbar -';
-    }
-
-    // Extrahiert alle Fragen + Maxpunkte (für Tab 1 / Bewertungshorizont)
-    function getQuestionsData() {
-        const markInputs = document.querySelectorAll('input[id$="-mark"]');
-        if (markInputs.length === 0) { alert('Keine Bewertungsfelder gefunden!'); return null; }
-
-        const questions = [];
-        const seen = new Set();
-
-        for (let i = 0; i < markInputs.length; i++) {
-            const c = getContainer(markInputs[i]);
-            if (!c) continue;
-            const qEl = c.querySelector('.qtext');
-            const question = qEl ? qEl.innerText.trim() : `Aufgabe ${i + 1}`;
-            const mpEl = c.querySelector('input[name$="-maxmark"]');
-            const maxPoints = mpEl ? parseFloat(mpEl.value.replace(',', '.')) : 1;
-            const key = question + '|' + maxPoints;
-            if (!seen.has(key)) {
-                seen.add(key);
-                questions.push({ frage: question, maxPunkte: maxPoints });
-            }
-        }
-        return questions;
-    }
-
-    // Extrahiert Schülerantworten (für Tab 2 / Korrektur)
-    function getStudentData() {
-        const markInputs = document.querySelectorAll('input[id$="-mark"]');
-        if (markInputs.length === 0) { alert('Keine Bewertungsfelder gefunden!'); return null; }
-        return Array.from(markInputs).map((_, idx) => ({
-            id:     idx,
-            answer: anonymizeText(getStudentAnswerFromDOM(idx))
-        }));
-    }
-
-    function anonymizeText(text) {
-        if (!appSettings.anonymize) return text;
-        return text.replace(/(Hallo|Liebe[r]?|Frau|Herr)\s+[A-ZÄÖÜ][a-zäöüß]+/g, '[ANONYMISIERT]');
-    }
-
-    // ── JSON PARSEN ──
-    function getParsedJSON(textareaId) {
-        const raw   = document.getElementById(textareaId).value;
-        const clean = raw.replace(/```json/gi, '').replace(/```/g, '').trim();
-        try {
-            return JSON.parse(clean).map(item => ({
-                ...item,
-                feedback:  cleanCitations(item.feedback  || ''),
-                reasoning: cleanCitations(item.reasoning || '')
-            }));
-        } catch (e) {
-            alert('Ungültiges JSON!\n\n' + e.message);
-            return null;
-        }
-    }
-
-    // ── PROMPT TEMPLATES ──
-
-    // Gibt den Original-Horizont-Prompt-Text zurück (ohne Daten-Anhang)
-    function getHorizontPromptTemplate(questions) {
-        const fach    = appSettings.fach    || '[Bitte Fach angeben]';
-        const jg      = appSettings.jahrgang || '[Bitte Jahrgang angeben]';
-        const niveau  = appSettings.kursniveau || 'G';
-        const punkte  = appSettings.punkteschritte || '0.1';
-        const rs      = appSettings.rechtschreibung || '10';
-        const fbLen   = appSettings.feedbacklaenge  || 'Ausführlich';
-        const anrede  = getAnrede();
-
-        const niveauLabel = { G: 'G = Gymnasial', M: 'M = Mittel', E: 'E = Einfach' }[niveau] || niveau;
-        const punkteLabel = { '0.1': '0,1 – Feine Schritte', '0.5': '0,5 – Halbe Punkte', '1.0': '1,0 – Nur ganze Punkte' }[punkte] || punkte;
-        const rsLabel = {
-            '0':  '0 % – kein Punktabzug (nur Feedback)',
-            '5':  '5 % – sehr geringe Gewichtung',
-            '10': '10 % – leichte Gewichtung (Standard)',
-            '15': '15 % – moderate Gewichtung',
-            '20': '20 % – erhöhte Gewichtung',
-            '25': '25 % – starke Gewichtung',
-            '30': '30 % – sehr starke Gewichtung'
-        }[rs] || rs + ' %';
-
-        const aufgabenJson = JSON.stringify(questions, null, 2);
-
-        return `═══════════════════════════════════════════════════════
-BEGRÜSSUNG & ERKLÄRUNG
-═══════════════════════════════════════════════════════
-
-Beginne das Gespräch immer mit folgender Begrüßung – exakt in dieser Reihenfolge und ohne Auslassungen. Gib keinen anderen Text aus.
-
-SATZ 1 – BEGRÜSSUNG:
-„Willkommen beim Moodle AI Grader – Bewertungshorizont-Generator."
-
-SATZ 2 – EINLEITUNG:
-„Dieser Chat hilft dir, einen präzisen, auf deine Aufgabe zugeschnittenen Bewertungshorizont zu erstellen – Schritt für Schritt und vollständig anpassbar."
-
-ABSCHNITT 3 – ERKLÄRUNG & ABLAUF:
-„Der Prozess läuft in 2 Stufen ab: Deine Rahmendaten (Fach, Jahrgang, Kursniveau und Bewertungskriterien) wurden bereits aus dem Plugin übernommen – du musst sie nur noch bestätigen. In Stufe 1 entwickeln wir gemeinsam den Bewertungshorizont inklusive Punkteverteilung, Operatorenzuordnung und AFB-Einstufung. Du kannst ihn anpassen, bis er passt. In Stufe 2 wird daraus ein fertiger Korrektur-Prompt generiert. Diesen fügst du im Plugin im Tab „Bewertungshorizont" unter Schritt 2 ein. Wechsle danach zum Tab „Korrektur" und klicke auf „Schülerantworten zur Korrektur kopieren" – das Plugin erstellt dann automatisch den fertigen Korrekturauftrag."
-
-ABSCHNITT 4 – LIZENZHINWEIS:
-„Das Plugin „Moodle AI Grader" wurde von T. Henken entwickelt. Der „Moodle AI Grader – Bewertungshorizont-Generator" ist ein gemeinsames Werk von T. Henken & A. Spielhoff. Beide Projekte sind unter der Lizenz CC BY-SA 4.0 veröffentlicht – du darfst sie frei verwenden, teilen und anpassen, solange du die Urheber nennst."
-
-Zeige dem Nutzer danach folgende vom Plugin vorausgefüllten Parameter und frage, ob sie korrekt sind. Warte auf Bestätigung bevor du mit Stufe 1 beginnst:
-
-„Ich habe folgende Einstellungen aus dem Moodle AI Grader übernommen:
-
-  📚 Fach: ${fach}
-  🎓 Jahrgang / Klassenstufe: ${jg}
-  📊 Kursniveau: ${niveauLabel}
-  🔢 Punkteschritte: ${punkteLabel}
-  ✏️ Rechtschreibgewichtung: ${rsLabel}
-  💬 Feedbacklänge: ${fbLen}
-  📝 Anrede im Feedback: „${anrede} …"
-
-Sind diese Angaben korrekt? Antworte mit JA um fortzufahren, oder passe einzelne Punkte direkt an."
-
-═══════════════════════════════════════════════════════
-ROLLE & AUFGABE
-═══════════════════════════════════════════════════════
-
-Du bist ein Experte für schulische Leistungsbewertung, Didaktik und Prompt-Engineering. Deine Aufgabe ist es, gemeinsam mit der Lehrkraft einen vollständigen, fachlich korrekten Bewertungshorizont zu erstellen und daraus am Ende einen fertigen Korrektur-Prompt zu generieren. Stelle immer NUR EINE Frage auf einmal. Warte auf die Antwort bevor du weitermachst.
-
-═══════════════════════════════════════════════════════
-STUFE 1 – BEWERTUNGSHORIZONT
-═══════════════════════════════════════════════════════
-
-Schritt 1 – Rahmendaten:
-Die Rahmendaten (Fach, Jahrgang, Kursniveau, Punkteschritte, Rechtschreibung, Feedbacklänge) wurden bereits vom Plugin übergeben und vom Nutzer bestätigt. Übernimm sie direkt ohne erneute Abfrage.
-
-Schritt 2 – Aufgaben erfassen:
-Die Aufgabenstellungen und Maximalpunkte wurden automatisch aus dem Moodle AI Grader übernommen (siehe [MOODLE_AUFGABEN_DATEN] am Ende dieses Prompts).
-
-Teile dem Nutzer mit: „Die Aufgabenstellungen und Maximalpunkte wurden automatisch übernommen."
-
-Frage: „Gibt es Teilaufgaben, deren Punkteverteilung nicht in der Aufgabenstellung steht?
-
-  1. Nein (Standard)
-  2. Ja – ich nenne sie gleich
-  3. Eigene Antwort"
-
-→ Bei „2. Ja": „Welche Teilaufgaben betrifft das? Bitte nenne sie mit der gewünschten Punkteverteilung."
-
-Frage: „Gibt es Zusatzmaterialien, Operatoren, Quellen, Bilder oder Diagramme, die ich bei der Bewertung berücksichtigen soll?
-
-  1. Nein (Standard)
-  2. Ja – ich füge sie gleich ein
-  3. Eigene Antwort"
-
-→ Bei „2. Ja": „Bitte füge die Materialien oder Beschreibungen hier ein."
-
-Schritt 3 – Bewertungshorizont erzeugen:
-Erstelle den Bewertungshorizont für jede Aufgabe einzeln und nacheinander. Passe Anspruchsniveau an das gewählte Kursniveau an.
-
-Zeige für jede Aufgabe folgendes Schema:
-
-Aufgabe [N]: [Aufgabenstellung]
-____________________________________________
-Maximalpunkte: X Punkte
-Operator: [Operator]
-AFB: [AFB I / II / III]
-Rechtschreibung: max. -X,X P. ([RS]% von X,X P.)
-____________________________________________
-Bewertungshorizont:
-• [Kriterium 1] – X Punkte
-• [Kriterium 2] – X Punkte
-• [Kriterium 3] – X Punkte
-____________________________________________
-
-Schreibe danach: „Passt der Bewertungshorizont für Aufgabe [N]?
-1. Ja – weiter zur nächsten Aufgabe
-2. Nein – ich möchte etwas anpassen
-3. Eigene Änderung eingeben"
-
-→ Bei „1. Ja": Weiter zur nächsten Aufgabe.
-→ Bei „2. Nein" oder „3.": Übernimm die Änderung, zeige den aktualisierten Horizont und frage erneut.
-
-Nachdem alle Aufgaben bestätigt wurden:
-Erstelle automatisch eine KURZVERSION des gesamten Bewertungshorizonts mit maximal 5–7 Stichpunkten je Aufgabe – nur Kernkriterien ohne Beispiele. Diese Kurzversion wird intern bei jeder Einzelbewertung im Korrektur-Chat als Anker verwendet.
-
-Schritt 4 – Gesamtzusammenfassung und Abschluss:
-Zeige die vollständige Zusammenfassung:
-• Alle Aufgaben mit Bewertungshorizont
-• Gesamtpunktzahl
-• AFB-Verteilung mit Hinweis auf mögliche Über- oder Untergewichtungen
-• Maximaler Rechtschreibabzug gesamt
-• Punkteschritte und Feedbacklänge
-
-Schreibe danach: „Du kannst jetzt noch Gesamtanpassungen vornehmen. Wenn alles passt, antworte mit JA."
-
-→ Wiederhole bis der Nutzer mit JA bestätigt.
-
-→ ÜBERGANG: „✓ Bewertungshorizont gespeichert. Wir gehen jetzt zu Stufe 2 über – ich generiere deinen Korrektur-Prompt."
-
-
-═══════════════════════════════════════════════════════
-STUFE 2 – KORREKTUR-PROMPT GENERIEREN
-═══════════════════════════════════════════════════════
-
-Generiere den finalen Korrektur-Prompt auf Basis aller Angaben aus Stufe 1. Gib den Korrektur-Prompt ausschließlich in einem einzigen Markdown-Codeblock aus.
-
-Beginne den Korrektur-Prompt mit folgender Titelzeile:
-# Bewertungshorizont – [Fach] Klasse [Jahrgang] ([Datum])
-
-Der Korrektur-Prompt muss folgende Abschnitte enthalten:
-1. ROLLE: Fach, Jahrgang, Kursniveau
-2. BEWERTUNGSREGELN: Punkteschritte, Rechtschreibgewichtung, Operatorenregel, AFB-Regel
-3. BEWERTUNGSHORIZONT: vollständig aus Stufe 1 übernehmen
-4. FEEDBACKREGELN: Anrede, Feedbacklänge mit konkreter Struktur
-5. JSON-AUSGABEFORMAT: id (0-basiert), points, reasoning, feedback
-
-Zeige den generierten Korrektur-Prompt und schreibe danach: „Du kannst den Korrektur-Prompt jetzt noch anpassen, oder den Markdown-Codeblock direkt kopieren."
-
-→ Wiederhole Stufe 2 nur wenn der Nutzer explizit eine Änderung wünscht.
-
-→ ÜBERGANG NACH STUFE 2:
-„✓ Dein Korrektur-Prompt ist fertig. Kopiere jetzt den Markdown-Codeblock oben und füge ihn im Moodle AI Grader im Tab „Bewertungshorizont" unter Schritt 2 ein. Wechsle danach zum Tab „Korrektur" und klicke auf „Schülerantworten zur Korrektur kopieren". Starte dann einen neuen Chat für die Korrektur."
-
-═══════════════════════════════════════════════════════
-MOODLE AI GRADER – AUFGABENDATEN
-═══════════════════════════════════════════════════════
-
-Ab hier folgen die automatisch aus dem Moodle AI Grader ausgelesenen Aufgabendaten.
-
-[MOODLE_AUFGABEN_DATEN]
-${aufgabenJson}`;
-    }
-
-    // Öffentliche Funktion: nutzt Override wenn vorhanden
-    function buildHorizontPrompt(questions) {
-        const aufgabenJson = JSON.stringify(questions, null, 2);
-        if (appSettings.promptHorizont) {
-            // Benutzerdefinierter Prompt: Platzhalter + aktuelle Parameter einsetzen
-            const anrede = getAnrede();
-            return appSettings.promptHorizont
-                .replace(/Fach: .+/,             'Fach: ' + (appSettings.fach || '[Fach]'))
-                .replace(/Jahrgang \/ Klassenstufe: .+/, 'Jahrgang / Klassenstufe: ' + (appSettings.jahrgang || '[Jahrgang]'))
-                .replace('[MOODLE_AUFGABEN_DATEN]', '[MOODLE_AUFGABEN_DATEN]\n' + aufgabenJson);
-        }
-        return getHorizontPromptTemplate(questions);
-    }
-
-    // 1b: Korrektur-Prompt Template
-    // Liefert den Batch-Kontext-Block, der GANZ OBEN im Korrektur-Prompt steht.
-    // Bei Batch 1: Stopp-Regel (erst Modus fragen, dann warten).
-    // Bei Batch 2+: Fortsetzungshinweis (Modus bereits geklärt, direkt bewerten).
-    function buildBatchContextBlock(batchNum, totalBatches) {
-        const isFirstBatch = batchNum <= 1;
-        const isMultiBatch = totalBatches > 1;
-        if (isFirstBatch) {
-            return `═══════════════════════════════════════════════════════
-⛔ STOPP-REGEL – HÖCHSTE PRIORITÄT (zuerst lesen, vor allem anderen)
-═══════════════════════════════════════════════════════
-
-ERSTKONTAKT-SIGNAL: Dies ist BATCH 1${isMultiBatch ? ' von ' + totalBatches : ''}. Der Korrekturmodus wurde noch NICHT gewählt.
-
-In dieser ERSTEN Nachricht gilt – ohne Ausnahme:
-→ Gib AUSSCHLIESSLICH die Begrüßung und danach die EINE Modusfrage aus.
-→ Gib JETZT KEINE Bewertung, KEIN Reasoning${isMultiBatch ? ', KEIN JSON und KEINE „=== BATCH 1 ===“-Markierung' : ' und KEIN JSON'} aus.
-→ Stelle die Modusfrage und WARTE auf die Antwort der Lehrkraft.
-→ Erst in deiner NÄCHSTEN Antwort – nachdem der Modus gewählt wurde – beginnst du mit der Bewertung dieses Batches${isMultiBatch ? ' und gibst das JSON mit den Batch-Markierungen aus' : ' und gibst das JSON aus'}.
-
-Diese Stopp-Regel hat VORRANG vor allen anderen Anweisungen in dieser Nachricht – auch vor dem Batch-Liefermechanismus weiter unten. Batching und Wartebedingung kollidieren nicht: Erst Modus klären, dann liefern.
-
-
-`;
-        }
-        return `═══════════════════════════════════════════════════════
-FORTSETZUNG – BATCH ${batchNum} von ${totalBatches}
-═══════════════════════════════════════════════════════
-
-ERSTKONTAKT-SIGNAL: Dies ist eine FORTSETZUNG (nicht Batch 1). Der Korrekturmodus wurde bereits in Batch 1 geklärt – frage NICHT erneut.
-→ Überspringe Begrüßung und Modusfrage vollständig.
-→ Arbeite direkt im bereits gewählten Modus (interaktiv oder automatisch) weiter.
-→ Bewerte die Schüler dieses Batches und gib das JSON mit den Batch-Markierungen aus (siehe Batch-Liefermechanismus unten).
-
-
-`;
-    }
-
-    function getKorrekturPromptTemplate(students, batchNum = 1, totalBatches = 1) {
-        const fach    = appSettings.fach    || '[Fach]';
-        const jg      = appSettings.jahrgang || '[Jahrgang]';
-        const niveau  = appSettings.kursniveau || 'G';
-        const punkte  = appSettings.punkteschritte || '0.1';
-        const rs      = appSettings.rechtschreibung || '10';
-        const fbLen   = appSettings.feedbacklaenge  || 'Ausführlich';
-        const anrede  = getAnrede();
-        const horizont = document.getElementById('mag-horizont-input').value.trim();
-
-        const niveauLabel = { G: 'Gymnasial', M: 'Mittel', E: 'Einfach' }[niveau] || niveau;
-        const punkteLabel = { '0.1': '0,1', '0.5': '0,5', '1.0': '1,0' }[punkte] || punkte;
-
-        const studentenJson = JSON.stringify(students, null, 2);
-
-        const isFirstBatch = batchNum <= 1;
-        const isMultiBatch = totalBatches > 1;
-
-        // Begrüßung + Modusfrage NUR bei Batch 1. Bei Fortsetzungen leer.
-        const begruessungBlock = isFirstBatch ? `═══════════════════════════════════════════════════════
-BEGRÜSSUNG & ERKLÄRUNG (nur bei Batch 1)
-═══════════════════════════════════════════════════════
-
-Beginne das Gespräch mit folgender Begrüßung – exakt in dieser Reihenfolge und ohne Auslassungen.
-
-SATZ 1 – BEGRÜSSUNG:
-„Willkommen beim Moodle AI Grader – Korrektur."
-
-SATZ 2 – EINLEITUNG:
-„Dieser Chat bewertet deine Schülerantworten auf Basis des Bewertungshorizonts, den du im Bewertungshorizont-Generator erstellt hast – präzise, einheitlich und mit individuellem Feedback für jeden Schüler."
-
-ABSCHNITT 3 – ERKLÄRUNG & ABLAUF:
-„Ich habe deinen Bewertungshorizont sowie die Schülerantworten erhalten. Ich bewerte jeden Schülertext einzeln – mit einem internen Reasoning für dich als Lehrkraft, einem individuellen Feedback für den Schüler und einer präzisen Punkteberechnung. Bevor ich beginne, kläre ich mit dir, wie ich vorgehen soll."
-
-ABSCHNITT 4 – LIZENZHINWEIS:
-„Das Plugin „Moodle AI Grader" wurde von T. Henken entwickelt. Der „Moodle AI Grader – Korrektur-Prompt" ist ein gemeinsames Werk von T. Henken & A. Spielhoff. Beide Projekte sind unter der Lizenz CC BY-SA 4.0 veröffentlicht – du darfst sie frei verwenden, teilen und anpassen, solange du die Urheber nennst."
-
-═══════════════════════════════════════════════════════
-MODUSFRAGE (nur bei Batch 1 – danach WARTEN)
-═══════════════════════════════════════════════════════
-
-Stelle direkt nach der Begrüßung GENAU DIESE EINE Frage und gib danach NICHTS weiter aus, bis die Lehrkraft geantwortet hat:
-
-„Wie soll ich die Korrektur durchführen?
-
-  1. INTERAKTIV – Ich zeige dir jede Bewertung einzeln zur Prüfung, bevor ich zum nächsten Schüler weitergehe (Standard, empfohlen).
-  2. AUTOMATISCH – Ich bewerte alle Schüler direkt und gebe das fertige JSON aus.
-
-Bitte antworte mit 1 oder 2."
-
-„AUTOMATISCH" ist eine bewusste, ausdrückliche Wahl – kein stiller Standard. Triff keine Annahme, sondern warte auf die Entscheidung der Lehrkraft.
-
-` : '';
-
-        // Batch-Liefermechanismus: nur bei mehreren Batches relevant.
-        const batchDeliveryBlock = isMultiBatch ? `═══════════════════════════════════════════════════════
-BATCH-LIEFERMECHANISMUS (gilt in BEIDEN Modi – greift erst nach Moduswahl)
-═══════════════════════════════════════════════════════
-
-Dies ist Batch ${batchNum} von ${totalBatches}. Diese Anweisung ist NUR ein Liefermechanismus für das JSON – sie ersetzt nicht die Modusklärung und löst keine sofortige Ausgabe aus.
-
-Sobald du das JSON für diesen Batch tatsächlich ausgibst – egal ob interaktiv oder automatisch –, rahme es so ein:
-  Erste Zeile:  === BATCH ${batchNum} ===
-  danach das JSON-Array
-  Letzte Zeile: === ENDE BATCH ${batchNum} ===
-
-${isFirstBatch ? 'Bei Batch 1 gibst du diese Markierungen NICHT in deiner ersten Antwort aus, sondern erst, nachdem der Modus gewählt wurde und du das JSON lieferst.' : 'Der Modus steht bereits fest – bewerte direkt und gib das markierte JSON aus.'}
-
-` : '';
-
-        const feedbackAnweisung =
-            fbLen === 'Kurz'        ? 'Schreibe ein kurzes Feedback. Integriere das Reasoning direkt ins Feedback (kein separates reasoning-Feld nötig, lasse es leer). Struktur:\nJe Aufgabe eine Zeile mit Symbol: ✓ [Aufgabe N]: [1 Satz was gut war] [X]/[Y] P. oder ✗ [Aufgabe N]: [1 Satz was fehlte] [X]/[Y] P. oder ⚠ [Aufgabe N]: [1 Satz teilweise richtig] [X]/[Y] P.\nRechtschreibung: -[X] P. (nur bei Abzug)\nEndpunktzahl: [X]/[Y] Punkte\nZeige den Rechtschreibabzug je Aufgabe NUR wenn er groesser als 0 ist (also weglassen wenn -0,0 P.). Trenne jeden Teil mit \\n.' :
-            fbLen === 'Mittel'      ? 'Schreibe ein mittleres Feedback. Integriere das Reasoning direkt ins Feedback (kein separates reasoning-Feld nötig, lasse es leer). Struktur:\nJe Aufgabe mit Symbol und 2-3 Sätzen:\n✓/✗/⚠ Aufgabe [N]:\n[Was richtig war und was fehlte]. Punkte: [X]/[Y] P. (davon -[Z] P. Rechtschreibung NUR wenn Abzug > 0, sonst weglassen)\n\nRechtschreibung & Grammatik: Häufigste Fehlerart + Gesamtabzug (-[X] P.)\n\nEndpunktzahl: [X]/[Y] Punkte\nTrenne jeden Abschnitt mit \\n\\n.' :
-            fbLen === 'Umfangreich' ? 'Schreibe ein umfangreiches Feedback (Oberstufe). Kein separates reasoning-Feld nötig, lasse es leer. Struktur: POSITIVE ASPEKTE (1-2 Sätze) + je Aufgabe: ausführliche Kriterienanalyse mit Formulierungsbeispielen und Stilanalyse, dann Punkte + Rechtschreibabzug + RECHTSCHREIBUNG & GRAMMATIK: alle Fehler einzeln mit Erklärung + Gesamtabzug + ZUSAMMENFASSUNG: Fazit, Verbesserungsvorschläge, Fachsprache + ENDPUNKTZAHL. Trenne jeden Abschnitt mit \\n\\n.' :
-            'Strukturiere das Feedback wie folgt:\n\n1. POSITIVE ASPEKTE: 1-2 Saetze uebergreifend was der Schueler gut gemacht hat.\n\n2. AUFGABEN (je Aufgabe einzeln):\nAufgabe [N]:\nErklaere was richtig war und was fehlte (positiv und negativ).\nPunkte: [X]/[Y] P. (davon -[Z] P. Rechtschreibung NUR wenn Abzug > 0, sonst weglassen)\n\nDann Aufgabe [N+1]:\nErklaere...\nPunkte: ...\n\n3. RECHTSCHREIBUNG & GRAMMATIK: Nenne konkrete Fehlerbeispiele mit Korrekturen. Pruefe: Summe der Rechtschreibabzuege je Aufgabe muss gleich dem Gesamtabzug sein. Schreibe: Rechtschreibung gesamt: -[X] P.\n\n4. ZUSAMMENFASSUNG: Allgemeines Fazit, uebergreifende Verbesserungsvorschlaege, allgemeines fachliches Feedback.\n\n5. ENDPUNKTZAHL: Pruefe dass die Endpunktzahl die Summe aller Aufgabenpunkte ist. Schreibe: Endpunktzahl: [X]/[Y] Punkte\n\nWichtig: Kein Abschnitt Operatorerf\u00fcllung. Trenne jeden Abschnitt mit \\n\\n.';
-
-        return `${begruessungBlock}═══════════════════════════════════════════════════════
-KORREKTUR – ARBEITSANWEISUNGEN
-═══════════════════════════════════════════════════════
-
-Technische Einstellung: Empfohlene Modelltemperatur: 0,1
-
-Zentrale Bewertungsregel: Bewerte alle Schülerarbeiten strikt nach demselben Maßstab. Verwende bei fachlich gleichen Antworten dieselbe Punktzahl.
-
-Rolle: Du bist Lehrer für ${fach} und bewertest Schülerantworten der Klassenstufe ${jg} auf Kursniveau ${niveauLabel} streng nach einem festen Bewertungsschema.
-
-Grundregeln: Bewerte nur Inhalte, die tatsächlich im Text stehen. Interpretiere keine fehlenden Aussagen hinein. Nutze ausschließlich den vorgegebenen Bewertungshorizont. Vergib Teilpunkte nur für klar erkennbare fachlich richtige Aussagen. Punkteschritte: ${punkteLabel}
-
-Operatorenregel: Berücksichtige bei jeder Aufgabe den verwendeten Operator.
-
-AFB-Regel: AFB I = Reproduktion, AFB II = Reorganisation und Transfer, AFB III = Reflexion und Bewertung.
-
-Vorlagenregel: Prüfe ob ein identischer oder nahezu identischer Textbaustein bei der Mehrheit der Schülerantworten vorkommt. Falls ja, markiere diesen als Vorlage und bewerte ausschließlich die individuellen Ergänzungen oder Abweichungen.
-
-Rechtschreibregel: Berechne den Rechtschreibabzug in zwei Schritten:\nWICHTIG: Der maximale Abzug beträgt ${rs} % der GESAMTPUNKTZAHL (nicht je Aufgabe). Beispiel: Bei 9,0 Gesamtpunkten und 10% Gewichtung = maximal 0,9 P. Abzug über alle Aufgaben zusammen.\nSchritt 1 – Fehlerdichte ermitteln: Zähle alle Fehler im gesamten Text und setze sie in Relation zur Gesamttextlänge.\n• Unter 10 % Fehlerdichte → kein Abzug, aber Hinweis im Feedback\n• 10–25 % Fehlerdichte → 50 % des maximalen Abzugs (= ${rs/2} % der Gesamtpunktzahl)\n• Über 25 % Fehlerdichte → 100 % des maximalen Abzugs (= ${rs} % der Gesamtpunktzahl)\nSchritt 2 – Schwere der Fehler gewichten:\n• Leichte Fehler (Komma, Groß-/Kleinschreibung) → Abzug um 50 % reduzieren\n• Schwere oder sinnentstellende Fehler → voller Abzug\nZeige im Feedback die Berechnung transparent: z.B. „Maximaler Abzug: 0,9 P. (10% von 9,0 P.) – Fehlerdichte: mittel → tatsächlicher Abzug: -0,3 P.“\nVerteile den Gesamtabzug anteilig auf die Aufgaben (proportional zur Aufgabenpunktzahl). Zeige den Abzug je Aufgabe bei den Punkten NUR wenn er größer als 0 ist, z.B.: Punkte: 1,5/3,0 P. (davon -0,2 P. Rechtschreibung). Wenn kein Abzug: nur Punkte: 1,5/3,0 P. ohne Klammerzusatz.\nDer maximale Abzug beträgt ${rs} % der Gesamtpunktzahl.\nRechtschreibung im Feedback – je nach Feedbackstil:\na) Kurz: Rechtschreibung in einem Halbsatz erwähnen. Nur bei Abzug konkret benennen.\nb) Mittel: Rechtschreibung in einem Satz kommentieren. Häufigste Fehlerart kurz nennen.\nc) Ausführlich: Rechtschreibung und Grammatik in einem eigenen Abschnitt besprechen. Konkrete Fehler mit Beispielen nennen: „Du hast / Sie haben folgende Fehler gemacht: • [Fehler 1] → Korrektur: [richtige Schreibweise] • [Fehler 2] → Korrektur: [richtige Schreibweise]" Gesamteinschätzung zum Ausdrucksvermögen.\nd) Umfangreich: Ausführliche Grammatik- und Stilanalyse in einem eigenen Abschnitt. Alle Fehler einzeln aufführen mit Erklärung warum es ein Fehler ist: „• [Fehler] → Korrektur: [richtige Schreibweise] Erklärung: [warum ist das falsch?]" Einschätzung des Ausdrucksvermögens und der Fachsprache mit konkreten Verbesserungsvorschlägen. Hinweis ob Fehler die fachliche Verständlichkeit beeinträchtigen.
-
-Feedbackstil – Anrede: „${anrede} …" (Klasse ${jg})
-
-Feedbacklänge: ${fbLen}
-${feedbackAnweisung}
-
-Konsistenz-Selbstcheck: Nach je 5 Schülern prüfe intern: Sind meine letzten 5 Bewertungen konsistent mit dem Bewertungshorizont?
-
-Pflichtprüfung vor jeder JSON-Ausgabe – für jeden Schüler einzeln:
-1. Summenprüfung Punkte: Addiere alle Aufgabenpunkte und subtrahiere den Rechtschreibabzug. Das Ergebnis muss exakt mit dem "points"-Wert im JSON übereinstimmen.
-2. Übereinstimmung Feedback/JSON: Die Endpunktzahl im Feedback-Text muss exakt mit dem "points"-Wert im JSON übereinstimmen. Wenn nicht – korrigiere den "points"-Wert im JSON auf die rechnerisch korrekte Summe.
-3. Rechtschreibabzug-Prüfung: Die Summe der Einzelabzüge je Aufgabe muss exakt dem Gesamtabzug entsprechen.
-Gib das JSON erst aus wenn alle drei Prüfungen bestanden sind.
-
-═══════════════════════════════════════════════════════
-ABLAUF NACH DER MODUSWAHL
-═══════════════════════════════════════════════════════
-
-Die folgenden Anweisungen greifen ERST, NACHDEM der Modus geklärt ist. Reihenfolge zwingend:
-1. (nur Batch 1) Modus klären → 2. warten → 3. im gewählten Modus arbeiten → 4. JSON ausgeben (bei mehreren Batches mit „=== BATCH X ===“-Markierung).
-Bei Batch 2/3 ist der Modus bereits geklärt – starte direkt bei Schritt 3.
-
-Im INTERAKTIVEN Modus (Modus 1): Zeige für jeden Schüler folgendes Schema und warte auf Bestätigung, bevor du zum nächsten Schüler weitergehst:
-
-Schüler-ID: [ID]
-____________________________________________
-AUFGABEN & ANTWORTEN DES SCHÜLERS:
-Aufgabe 1: [Aufgabenstellung]
-Antwort: [Antwort des Schülers]
-Aufgabe 2: [Aufgabenstellung]
-Antwort: [Antwort des Schülers]
-...
-____________________________________________
-KI-BEWERTUNG:
-Reasoning: [Interne Begründung je Aufgabe]
-____________________________________________
-Feedback: [Feedback-Text für den Schüler]
-____________________________________________
-Punkteübersicht:
-Aufgabe 1: X von Y Punkten
-Aufgabe 2: X von Y Punkten
-...
-Rechtschreibabzug: -Z Punkte
-Endpunktzahl: X von Y Punkten
-____________________________________________
-Möchtest du etwas anpassen?
-1. OK – weiter zum nächsten Schüler (reviewed: true)
-2. Punkte anpassen
-3. Feedback anpassen
-4. Komplette Bewertung neu ausgeben
-
-→ Bei „1. OK“: Setze reviewed: true für diesen Schüler und gehe zum nächsten.
-→ Bei „2.“ / „3.“ / „4.“: Führe die Änderung durch, zeige das aktualisierte Schema und frage erneut.
-→ Nach dem letzten Schüler dieses Batches: Gib das finale JSON für alle Schüler dieses Batches aus.
-
-Im AUTOMATISCHEN Modus (Modus 2): Bewerte alle Schüler dieses Batches direkt nacheinander – ohne Zwischenrückfrage – und gib anschließend das finale JSON für den gesamten Batch aus.
-
-Finales JSON – Ausgabeformat:
-\`\`\`json
-[
-  {
-    "id": 0,
-    "points": 4.5,
-    "reviewed": false,
-    "reasoning": "Aufgabe 1: 3/5 Punkte – Begründung.\nAufgabe 2: 2/2 Punkte – Vollständig.\nGesamteindruck: ...",
-    "feedback": "Punkteübersicht:\nAufgabe 1: 3/5 Punkte – Kernaspekte genannt, Begründung fehlt.\n\nPositive Aspekte:\nDu hast ...\n\nVerbesserungsvorschläge:\n...\n\nRechtschreibung:\n...\n\nEndpunktzahl: 4,5/15,0 Punkte"
+  'use strict';
+
+  /* ═══════════════════════════════════════════════════════════════════
+     1 · KONTEXT
+     ═══════════════════════════════════════════════════════════════════ */
+
+  // Die Bearbeiten-Seite erkennt man am Formularfeld des Erwartungshorizonts.
+  // Live geprueft 04.09.2026: die Seite hat ZWEI Formulare, nur eines traegt das Feld.
+  function istBearbeitenSeite() {
+    return !!document.querySelector('[name="graderinfo[text]"]');
   }
-]
+
+  // Die Bewertungsseite erkennt man an den Punktefeldern plus einem Merkmal, das es
+  // nur auf einer Moodle-Bewertungsseite gibt (Gegenprobe bei breitem matches-Muster).
+  function istBewertungsSeite() {
+    if (document.querySelectorAll('input[id$="-mark"]').length === 0) return false;
+    return !!(document.querySelector('.qtype_essay_response')
+           || document.querySelector('textarea[id$="-comment_id"]')
+           || document.querySelector('textarea[name$="-comment"]')
+           || document.querySelector('.ablock'));
+  }
+
+  const KONTEXT = istBearbeitenSeite() ? 'bearbeiten'
+                : istBewertungsSeite() ? 'bewertung'
+                : null;
+  if (!KONTEXT) return;
+
+  /* ═══════════════════════════════════════════════════════════════════
+     2 · KONSTANTEN
+     ═══════════════════════════════════════════════════════════════════ */
+
+  // Zustaendigkeits-Marker in der ersten Zeile des Horizonts. Toleriert Klammern/keine,
+  // Gross-/Kleinschreibung, Leer- statt Bindestrich, Text dahinter.
+  const MARKER_RE   = /^\s*[\[(]?\s*moodle[-\s]?ai[-\s]?(coach|grader)\s*[\])]?\s*[:.–-]?\s*/i;
+  const MARKER_ZEILE = '[moodle-ai-grader]';
+
+  // Eine Aufgabengrenze — in der Horizont-Ueberschrift wie in der Kopfzeile der
+  // Antwortvorlage. Die eingekreiste Ziffer davor ist optional.
+  const AUFGABE_RE = /^\s*[①-⑳⓪]?\s*Aufgabe\s+(\d+)\b/i;
+
+  // AFB-Farblogik des Projekts. Nur wirksam, wenn die Option eingeschaltet ist —
+  // fremde Nutzer bekommen das neutrale Layout.
+  const AFB_FARBEN = {
+    'I':   { kopf: '#eaf4ea', feld: '#f5faf5' },
+    'II':  { kopf: '#fdf2e0', feld: '#fffaf0' },
+    'III': { kopf: '#fbe9e9', feld: '#fdf3f3' },
+    'neutral': { kopf: '#eceff3', feld: '#f8f9fb' }
+  };
+
+  // Rechtschreibabzug: Stufen nach Fehlern je 100 Woertern.
+  // Anteil vom Hoechstabzug. Unter MINDESTWOERTER greift die Dichte nicht — dort
+  // wird nach absoluter Fehlerzahl gestaffelt (wie im Coach).
+  const RS_STUFEN = {
+    mild:   [ [1.5, 0], [3.0, 1/3], [5.0, 2/3], [Infinity, 1] ],
+    normal: [ [1.0, 0], [2.0, 1/3], [3.5, 2/3], [Infinity, 1] ],
+    streng: [ [0.5, 0], [1.5, 1/3], [2.5, 2/3], [Infinity, 1] ]
+  };
+  const RS_ABSOLUT   = [0, 1/3, 1/2, 2/3, 5/6, 1]; // 0,1,2,3,4,5+ Fehler
+  const MINDESTWOERTER = 40;
+
+  const STANDARD = {
+    fach:            '',
+    jahrgang:        '',
+    kursniveau:      'G',
+    punkteschritte:  '0.5',
+    rechtschreibung: '10',      // Prozent der Gesamtpunktzahl, 0 = kein Abzug
+    rsStrenge:       'normal',  // keine | mild | normal | streng
+    feedbacklaenge:  'Ausführlich',
+    afbFarben:       false,     // Antwortvorlage in AFB-Farblogik statt neutral
+    vorlagePunkte:   true,
+    vorlageAfb:      true,
+    kiHinweis:       true,
+    entferneQuellen: true,
+    promptHorizont:  null,
+    promptKorrektur: null,
+    horizontLokal:   ''         // Rueckfallebene: Horizont im Plugin statt in der Frage
+  };
+
+  let E = JSON.parse(JSON.stringify(STANDARD));   // aktive Einstellungen
+
+  /* ═══════════════════════════════════════════════════════════════════
+     3 · KLEINE HELFER
+     ═══════════════════════════════════════════════════════════════════ */
+
+  const $  = (sel, wurzel) => (wurzel || document).querySelector(sel);
+  const $$ = (sel, wurzel) => [...(wurzel || document).querySelectorAll(sel)];
+
+  function el(tag, klasse, text) {
+    const n = document.createElement(tag);
+    if (klasse) n.className = klasse;
+    if (text != null) n.textContent = text;
+    return n;
+  }
+
+  function escapeHtml(s) {
+    return String(s == null ? '' : s)
+      .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;');
+  }
+
+  // Punkte im deutschen Format — sonst nimmt Moodle den Wert nicht an.
+  function komma(z) { return String(z).replace('.', ','); }
+  function zahl(s)  { return parseFloat(String(s == null ? '' : s).replace(',', '.')); }
+
+  // Auf die eingestellten Punkteschritte runden, nie ueber max.
+  function rundePunkte(wert, max) {
+    const schritt = parseFloat(E.punkteschritte) || 0.5;
+    let p = Math.round(wert / schritt) * schritt;
+    p = Math.max(0, Math.min(p, max));
+    return Math.round(p * 100) / 100;
+  }
+
+  function woerter(text) {
+    return (String(text || '').trim().match(/[\p{L}\p{N}][\p{L}\p{N}'’-]*/gu) || []).length;
+  }
+
+  function ersteZeile(text) {
+    return (String(text || '').split('\n').map(z => z.trim()).find(Boolean)) || '';
+  }
+
+  function ohneMarker(text) {
+    const z = ersteZeile(text);
+    if (MARKER_RE.test(z)) {
+      return String(text).replace(z, z.replace(MARKER_RE, '')).replace(/^\s*\n/, '');
+    }
+    // Steht der Marker als eigene Zeile irgendwo am Anfang, ebenfalls entfernen.
+    return String(text || '').replace(
+      /^\s*[\[(]?\s*moodle[-\s]?ai[-\s]?(coach|grader)\s*[\])]?\s*[:.–-]?\s*$/im, '').replace(/^\s*\n+/, '');
+  }
+
+  function quellenWeg(text) {
+    if (!E.entferneQuellen) return String(text || '');
+    return String(text || '').replace(/\[\w+:\d+\]/g, '').replace(/ {2,}/g, ' ').trim();
+  }
+
+  // Anrede nach Jahrgang — ab Jahrgang 11 wird gesiezt.
+  function anrede() {
+    const jg = parseInt(E.jahrgang, 10);
+    return (!isNaN(jg) && jg >= 11) ? 'Sie haben' : 'Du hast';
+  }
+
+  function htmlZuText(html) {
+    const d = document.createElement('div');
+    d.innerHTML = String(html || '');
+    return (d.innerText || d.textContent || '').trim();
+  }
+
+  /* ═══════════════════════════════════════════════════════════════════
+     4 · FORMULAR-MECHANIK  (uebernommen aus Moodle AI Coach / Reviewer)
+
+     Es wird NIE ein Feld der offenen Seite befuellt: TinyMCE liegt ueber den
+     Textareas und wuerde beim Absenden seinen eigenen Inhalt darueberschreiben.
+     Stattdessen: Formular per fetch holen, Felder ersetzen, selbst absenden,
+     danach neu holen und gegenpruefen. Das braucht keine Sonderberechtigung.
+     ═══════════════════════════════════════════════════════════════════ */
+
+  async function holeDok(url) {
+    const r = await fetch(url, { credentials: 'same-origin' });
+    if (!r.ok) throw new Error('HTTP ' + r.status);   // Fehlerstatus nie durchwinken
+    return new DOMParser().parseFromString(await r.text(), 'text/html');
+  }
+
+  // Aus form.elements nur INPUT, SELECT und TEXTAREA uebernehmen.
+  // Das Fragenformular enthaelt fuenf FIELDSETs MIT name (live geprueft 04.09.2026) —
+  // ohne diesen Filter gingen sie als "undefined" mit.
+  function formularFelder(form) {
+    const p = new URLSearchParams();
+    [...form.elements].forEach(f => {
+      if (!f.name || f.disabled) return;
+      if (!['INPUT', 'SELECT', 'TEXTAREA'].includes(f.tagName)) return;
+      if (f.type === 'file' || f.type === 'submit' || f.type === 'button') return;
+      if ((f.type === 'checkbox' || f.type === 'radio') && !f.checked) return;
+      if (f.tagName === 'SELECT') {
+        [...f.selectedOptions].forEach(o => p.append(f.name, o.value));
+      } else {
+        p.append(f.name, f.value);
+      }
+    });
+    return p;
+  }
+
+  async function sendeFormular(form, felder, url) {
+    // submitbutton nehmen — cancel darf auf keinen Fall mitgehen.
+    const submit = [...form.querySelectorAll('input[type=submit],button[type=submit]')]
+      .find(b => b.name && b.name !== 'cancel')
+      || [...form.elements].find(f => f.type === 'submit' && f.name && f.name !== 'cancel');
+    if (submit) felder.set(submit.name, submit.value);
+    const action = new URL(form.getAttribute('action') || url, url).href;
+    const antwort = await fetch(action, {
+      method: 'POST', credentials: 'same-origin',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: felder.toString()
+    });
+    if (!antwort.ok) throw new Error('HTTP ' + antwort.status + ' beim Speichern');
+  }
+
+  /* --- Bearbeiten-Seite: graderinfo und responsetemplate in EINEM Absenden --- */
+
+  // eintraege: { 'graderinfo[text]': html, 'responsetemplate[text]': html }
+  // nurPruefen = Trockenlauf: sagt, ob die Felder da sind und ob schon etwas drinsteht.
+  async function schreibeFrageFelder(eintraege, nurPruefen) {
+    const url = location.href;
+    const dok = await holeDok(url);
+    const form = [...dok.forms].find(f => f.querySelector('[name="graderinfo[text]"]'));
+    if (!form) {
+      throw new Error(dok.querySelector('form#login')
+        ? 'Moodle hat auf die Anmeldeseite umgeleitet — bist du noch angemeldet?'
+        : 'Bearbeiten-Formular nicht gefunden (ist es eine Freitextfrage?)');
+    }
+    const felder = formularFelder(form);
+    const bericht = [];
+    for (const name of Object.keys(eintraege)) {
+      if (!felder.has(name)) throw new Error('Feld „' + name + '" nicht im Formular');
+      const vorher = felder.get(name) || '';
+      bericht.push({ feld: name, belegt: htmlZuText(vorher).length > 0 });
+      if (!nurPruefen) felder.set(name, eintraege[name]);
+    }
+    if (nurPruefen) return { bericht };
+
+    await sendeFormular(form, felder, url);
+
+    // Gegenprobe an einer frisch geholten Fassung
+    const kontrolle = await holeDok(url);
+    const kform = [...kontrolle.forms].find(f => f.querySelector('[name="graderinfo[text]"]'));
+    const ergebnis = [];
+    for (const name of Object.keys(eintraege)) {
+      const feld = kform && kform.querySelector('[name="' + CSS.escape(name) + '"]');
+      const drin = feld ? htmlZuText(feld.value) : '';
+      const soll = htmlZuText(eintraege[name]).slice(0, 30);
+      ergebnis.push({ feld: name, ok: !!(drin && soll && drin.includes(soll.slice(0, 20))) });
+    }
+    return { bericht, ergebnis };
+  }
+
+  /* ═══════════════════════════════════════════════════════════════════
+     5 · MOODLE LESEN
+     ═══════════════════════════════════════════════════════════════════ */
+
+  // Rohe Aufgabenstellung — Grundlage fuer den Horizont-Prompt.
+  function leseAufgabenstellung() {
+    if (KONTEXT === 'bearbeiten') {
+      const ta = $('[name="questiontext[text]"]');
+      return ta ? htmlZuText(ta.value) : '';
+    }
+    const q = $('.que .qtext') || $('.qtext');
+    return q ? q.innerText.trim() : '';
+  }
+
+  function leseGesamtpunkte() {
+    if (KONTEXT === 'bearbeiten') {
+      const dm = $('[name="defaultmark"]');
+      return dm ? (zahl(dm.value) || 0) : 0;
+    }
+    const mm = $('input[name$="-maxmark"]');
+    if (mm) return zahl(mm.value) || 0;
+    const anzeige = $('.que .grade');
+    const m = anzeige && anzeige.innerText.match(/([\d.,]+)\s*$/);
+    return m ? zahl(m[1]) : 0;
+  }
+
+  // Roher Horizont — aus dem Formularfeld (Bearbeiten) oder aus dem DOM der
+  // Bewertungsseite (dort steht er als div.graderinfo, kein Umweg noetig).
+  function leseHorizontRoh() {
+    if (KONTEXT === 'bearbeiten') {
+      const ta = $('[name="graderinfo[text]"]');
+      return ta ? ta.value : '';
+    }
+    const gi = $('.que .graderinfo') || $('.graderinfo');
+    return gi ? gi.innerHTML : '';
+  }
+
+  // Welche Erweiterung ist zustaendig? Der Grader sperrt nie, er sagt nur Bescheid.
+  function zustaendigkeit() {
+    const roh = htmlZuText(leseHorizontRoh());
+    if (!roh) return { horizont: false, wer: null };
+    const m = ersteZeile(roh).match(MARKER_RE);
+    return { horizont: true, wer: m ? m[1].toLowerCase() : null };
+  }
+
+  /* --- Horizont in Aufgabenbloecke zerlegen --- */
+
+  // Der Horizont traegt je Aufgabe eine Ueberschrift „Aufgabe N …".
+  // Faellt die Zerlegung aus (fremd erstellter Horizont, freier Fliesstext), gibt es
+  // EINEN Block mit der ganzen Arbeit — Stufe 2 der Abstufung.
+  function zerlegeHorizont(html) {
+    const wurzel = document.createElement('div');
+    wurzel.innerHTML = ohneMarker(String(html || ''));
+    const bloecke = [];
+    let aktuell = null;
+    [...wurzel.children].forEach(kind => {
+      const zeile = (kind.innerText || kind.textContent || '').trim();
+      const m = zeile.match(AUFGABE_RE);
+      if (m && /^(H[1-6]|P|DIV)$/.test(kind.tagName) && zeile.length < 200) {
+        aktuell = { nr: parseInt(m[1], 10), kopf: zeile, html: '', text: '' };
+        bloecke.push(aktuell);
+        return;
+      }
+      if (aktuell) {
+        aktuell.html += kind.outerHTML;
+        aktuell.text += (kind.innerText || kind.textContent || '') + '\n';
+      }
+    });
+    if (!bloecke.length) {
+      // Kein gegliederter Horizont (fremd erstellt, freier Fließtext): ein Block mit der
+      // ganzen Arbeit. Der Marker muss auch hier raus — er ist Verwaltung, kein Maßstab.
+      const ganz = ohneMarker(htmlZuText(html));
+      if (!ganz) return [];
+      return [{ nr: 1, kopf: 'Aufgabe 1', html: String(html || ''), text: ganz,
+                punkte: null, afb: null, ganzeArbeit: true }];
+    }
+    bloecke.forEach(b => {
+      b.text = b.text.trim();
+      const p = b.kopf.match(/\(\s*([\d.,]+)\s*(?:P\.?|Punkte?)\s*\)/i);
+      b.punkte = p ? zahl(p[1]) : null;
+      const a = b.kopf.match(/AFB\s*(I{1,3}(?:\s*[-–]\s*I{1,3})?)/i);
+      b.afb = a ? a[1].replace(/\s/g, '') : null;
+    });
+    return bloecke;
+  }
+
+  /* --- Abgaben der Bewertungsseite --- */
+
+  function containerVon(feld) {
+    let e = feld;
+    for (let i = 0; i < 12 && e; i++) {
+      e = e.parentElement;
+      if (e && e.classList && (e.classList.contains('que') || e.classList.contains('content'))) return e;
+    }
+    return null;
+  }
+
+  // Eine Abgabe je Versuch. Namen statt Indizes, damit beim Schreiben nichts verrutscht.
+  function leseAbgaben() {
+    return $$('input[id$="-mark"]').map((feld, i) => {
+      const c = containerVon(feld);
+      const essay = c && c.querySelector('.qtype_essay_response');
+      const kommentar = c && c.querySelector('textarea[name$="-comment"]');
+      const maxFeld = c && c.querySelector('input[name$="-maxmark"]');
+      const roh = essay ? (essay.innerHTML || '') : '';
+      const text = essay ? essay.innerText.trim() : '';
+      return {
+        nr: i + 1,
+        markfeld: feld.name || '',
+        kommentarfeld: kommentar ? kommentar.name : '',
+        ist: zahl(feld.value) || 0,
+        max: maxFeld ? (zahl(maxFeld.value) || 0) : leseGesamtpunkte(),
+        rohHtml: roh,
+        text: text,
+        anker: c && c.id ? '#' + c.id : ''
+      };
+    }).filter(a => a.markfeld);
+  }
+
+  /* --- Abgabe in Aufgaben zerlegen (die drei Stufen) ---
+
+     1) Kopfzeilen der Antwortvorlage gefunden  → je Aufgabe zerlegen (bester Fall)
+     2) keine Gliederung                        → ein Block, die KI ordnet zu
+     Stufe 3 (kein Horizont) entscheidet nicht hier, sondern in der Oberflaeche.
+
+     Wichtig: Das ist rein intern. Am Arbeitsablauf aendert es nichts — ein Prompt,
+     ein JSON zurueck. Niemals je Aufgabe einzeln kopieren lassen.                    */
+  function zerlegeAbgabe(rohHtml, klartext) {
+    const wurzel = document.createElement('div');
+    wurzel.innerHTML = String(rohHtml || '');
+    const bloecke = [];
+    let aktuell = null;
+
+    const durchlaufen = (knoten) => {
+      [...knoten.children].forEach(kind => {
+        const zeile = (kind.innerText || kind.textContent || '').trim();
+        const kopfZeile = zeile.split('\n')[0].trim();
+        const m = kopfZeile.match(AUFGABE_RE);
+        // Eine Kopfzeile ist kurz und beginnt mit „Aufgabe N".
+        if (m && kopfZeile.length < 160 && kopfZeile.length >= zeile.length - 2) {
+          aktuell = { nr: parseInt(m[1], 10), text: '' };
+          bloecke.push(aktuell);
+          return;
+        }
+        if (m && kind.children.length) { durchlaufen(kind); return; }
+        if (aktuell) aktuell.text += zeile + '\n';
+        else if (kind.children.length) durchlaufen(kind);
+      });
+    };
+    durchlaufen(wurzel);
+
+    const gefuellt = bloecke.filter(b => b.text.trim());
+    if (bloecke.length >= 2 && gefuellt.length) {
+      bloecke.forEach(b => { b.text = b.text.trim(); });
+      return { gegliedert: true, aufgaben: bloecke };
+    }
+    return { gegliedert: false, aufgaben: [{ nr: 1, text: String(klartext || '').trim() }] };
+  }
+
+  /* ═══════════════════════════════════════════════════════════════════
+     6 · RECHNEN — hier, nicht in der KI
+
+     Die KI liefert je Aufgabe einen Erfuellungsgrad in Prozent und je Abgabe eine
+     gezaehlte Fehlerliste. Alles Weitere rechnet dieser Abschnitt.
+     ═══════════════════════════════════════════════════════════════════ */
+
+  // Anteil vom Hoechstabzug. Unter MINDESTWOERTER greift die Dichte nicht —
+  // dort nach absoluter Fehlerzahl staffeln, wie im Coach.
+  function rsAnteil(fehlerGewichtet, wortzahl) {
+    if (E.rsStrenge === 'keine') return 0;
+    if (wortzahl < MINDESTWOERTER) {
+      const i = Math.min(Math.round(fehlerGewichtet), RS_ABSOLUT.length - 1);
+      return RS_ABSOLUT[i];
+    }
+    const dichte = wortzahl > 0 ? (fehlerGewichtet * 100) / wortzahl : 0;
+    const leiter = RS_STUFEN[E.rsStrenge] || RS_STUFEN.normal;
+    for (const [grenze, anteil] of leiter) if (dichte <= grenze) return anteil;
+    return 1;
+  }
+
+  // Schwere Fehler zaehlen doppelt — welche schwer sind, sagt die KI in der Kategorie.
+  function fehlerGewicht(liste) {
+    return (liste || []).reduce((s, f) => s + (f && f.schwer ? 2 : 1), 0);
+  }
+
+  /* Rechnet eine Abgabe durch.
+     bewertung = { aufgaben: [{nr, prozent}], fehler: [{wort, korrektur, kategorie, schwer}] }
+     horizont  = Bloecke aus zerlegeHorizont(), fuer die Punkteverteilung             */
+  function rechneAbgabe(abgabe, bewertung, horizontBloecke) {
+    const gesamtMax = abgabe.max || leseGesamtpunkte() || 0;
+
+    // Punkte je Aufgabe: Verteilung aus dem Horizont, sonst gleichmaessig.
+    const ausHorizont = (horizontBloecke || []).filter(b => b.punkte != null);
+    const summeHorizont = ausHorizont.reduce((s, b) => s + b.punkte, 0);
+
+    // Massgeblich ist die Aufgabenliste des HORIZONTS, nicht die der KI-Antwort:
+    // laesst die KI eine Aufgabe aus, bekommt sie 0 % — sonst verschoebe sich still
+    // die Punkteverteilung aller uebrigen Aufgaben.
+    const nummern = (horizontBloecke && horizontBloecke.length)
+      ? horizontBloecke.map(b => b.nr)
+      : (bewertung.aufgaben || []).map(a => Number(a.nr));
+    const anzahl = Math.max(1, nummern.length);
+    const fehlendeAufgaben = [];
+
+    const teil = nummern.map(nr => {
+      const a = (bewertung.aufgaben || []).find(x => Number(x.nr) === nr)
+             || (fehlendeAufgaben.push(nr), { nr: nr, prozent: 0 });
+      const block = (horizontBloecke || []).find(b => b.nr === nr);
+      let max;
+      if (block && block.punkte != null && summeHorizont > 0) {
+        // Horizontpunkte auf die tatsaechliche Gesamtpunktzahl skalieren, falls sie abweicht
+        max = gesamtMax > 0 ? (block.punkte * gesamtMax) / summeHorizont : block.punkte;
+      } else {
+        max = gesamtMax / anzahl;
+      }
+      const prozent = Math.max(0, Math.min(100, Number(a.prozent) || 0));
+      return { nr: nr, max: max, prozent: prozent, roh: (max * prozent) / 100 };
+    });
+
+    const inhalt = teil.reduce((s, t) => s + t.roh, 0);
+
+    // Rechtschreibabzug: Prozentsatz der GESAMTpunktzahl, nicht je Aufgabe.
+    const rsProzent = parseFloat(E.rechtschreibung) || 0;
+    const hoechstabzug = (gesamtMax * rsProzent) / 100;
+    const gew = fehlerGewicht(bewertung.fehler);
+    const wz = woerter(abgabe.text);
+    const anteil = rsAnteil(gew, wz);
+    const abzug = Math.min(hoechstabzug * anteil, inhalt);
+
+    // Abzug proportional zur Aufgabenpunktzahl verteilen, damit die Einzelwerte stimmen.
+    teil.forEach(t => {
+      const anteilT = inhalt > 0 ? t.roh / inhalt : 0;
+      t.abzug = abzug * anteilT;
+      t.punkte = rundePunkte(t.roh - t.abzug, t.max);
+    });
+
+    const summe = teil.reduce((s, t) => s + t.punkte, 0);
+    return {
+      teil: teil,
+      wortzahl: wz,
+      fehlerGewichtet: gew,
+      fehlerDichte: wz > 0 ? Math.round((gew * 1000) / wz) / 10 : 0,
+      hoechstabzug: Math.round(hoechstabzug * 100) / 100,
+      abzug: Math.round(abzug * 100) / 100,
+      gesamt: rundePunkte(summe, gesamtMax),
+      max: gesamtMax,
+      fehlendeAufgaben: fehlendeAufgaben
+    };
+  }
+
+  /* ═══════════════════════════════════════════════════════════════════
+     7 · HORIZONT UND ANTWORTVORLAGE BAUEN
+
+     Das Layout baut die ERWEITERUNG aus einer eingebauten Vorlage, nicht die KI.
+     Formvorgaben setzt kein Prompt durch — die KI liefert nur den Inhalt.
+     ═══════════════════════════════════════════════════════════════════ */
+
+  function afbFarbe(afb) {
+    if (!E.afbFarben) return AFB_FARBEN.neutral;
+    const stufe = String(afb || '').toUpperCase().split(/[-–]/).pop().trim();
+    return AFB_FARBEN[stufe] || AFB_FARBEN.neutral;
+  }
+
+  function kopfzeile(a) {
+    const teile = ['Aufgabe ' + a.nr];
+    let s = escapeHtml(teile[0]);
+    if (E.vorlageAfb && a.afb) {
+      s += ' <span style="font-size:13px;font-style:italic;font-weight:normal;color:#6b6b6b;">AFB '
+         + escapeHtml(a.afb) + '</span>';
+    }
+    if (a.schlagwort) s += ' · ' + escapeHtml(a.schlagwort);
+    if (E.vorlagePunkte && a.punkte != null) {
+      s += ' <span style="font-size:12px;font-weight:600;color:#6b6b6b;">('
+         + escapeHtml(komma(a.punkte)) + (a.punkte === 1 ? ' Punkt' : ' Punkte') + ')</span>';
+    }
+    return s;
+  }
+
+  // Antwortvorlage: je Aufgabe ein div-Block. Kein <table> (TinyMCE blendet sonst eine
+  // Tabellen-Leiste ein), kein display:flex (uebersteht das Tippen nicht), kein
+  // Platzhaltertext. Immer genau ZWEI leere Absaetze — das Feld waechst mit jedem Return.
+  function baueAntwortvorlage(aufgaben) {
+    return (aufgaben || []).map(a => {
+      const f = afbFarbe(a.afb);
+      return '<div style="border:1.5px solid #9e9e9e;border-radius:12px;overflow:hidden;margin:10px 0;">'
+        + '<div style="background:' + f.kopf + ';padding:9px 14px;font-size:16px;font-weight:bold;'
+        + 'color:#33404d;border-bottom:1.5px solid #9e9e9e;">' + kopfzeile(a) + '</div>'
+        + '<div style="background:' + f.feld + ';padding:10px 14px;font-size:15px;line-height:1.45;">'
+        + '<p style="margin:0;">&nbsp;</p><p style="margin:0;">&nbsp;</p></div>'
+        + '</div>';
+    }).join('\n');
+  }
+
+  // Erwartungshorizont: Marker, dann je Aufgabe eine Ueberschrift und der Text.
+  // Die Ueberschrift ist die Grenze, an der spaeter wieder zerlegt wird — sie muss
+  // maschinenlesbar bleiben. Deshalb <h4> mit „Aufgabe N" am Anfang.
+  function baueHorizont(aufgaben) {
+    const kopf = '<p>' + MARKER_ZEILE + '</p>';
+    const bloecke = (aufgaben || []).map(a => {
+      let inhalt = String(a.horizont || '').trim();
+      if (!/<[a-z][\s\S]*>/i.test(inhalt)) {
+        inhalt = '<p>' + escapeHtml(inhalt).replace(/\n{2,}/g, '</p><p>').replace(/\n/g, '<br>') + '</p>';
+      }
+      return '<h4>' + kopfzeile(a) + '</h4>' + inhalt;
+    });
+    return kopf + bloecke.join('\n');
+  }
+
+  /* ═══════════════════════════════════════════════════════════════════
+     8 · PROMPTS
+     ═══════════════════════════════════════════════════════════════════ */
+
+  const NIVEAU = { G: 'G — gymnasial', M: 'M — mittel', E: 'E — einfach' };
+
+  function rahmendaten() {
+    return [
+      'Fach: '                 + (E.fach || '[nicht angegeben]'),
+      'Jahrgang: '             + (E.jahrgang || '[nicht angegeben]'),
+      'Kursniveau: '           + (NIVEAU[E.kursniveau] || E.kursniveau),
+      'Feedbacklänge: '        + E.feedbacklaenge,
+      'Anrede im Feedback: '   + anrede() + ' …'
+    ].join('\n');
+  }
+
+  function horizontPromptVorlage() {
+    return `Du bist erfahrene Lehrkraft und erstellst den Erwartungshorizont für eine Klausur.
+
+RAHMENDATEN
+[MAG_RAHMENDATEN]
+
+AUFGABENSTELLUNG (aus Moodle übernommen, Gesamtpunktzahl: [MAG_GESAMTPUNKTE])
+[MAG_AUFGABEN]
+
+WAS DU TUST
+1. Zerlege die Aufgabenstellung in ihre Teilaufgaben. Übernimm die Nummerierung der
+   Aufgabenstellung. Steht dort eine Punktzahl je Aufgabe, übernimm sie unverändert;
+   fehlt sie, verteile die Gesamtpunktzahl begründet und weise darauf hin.
+2. Bestimme je Aufgabe den Operator und die Anforderungsstufe AFB (I, II, III oder eine
+   Spanne wie II-III).
+3. Schreibe je Aufgabe einen Erwartungshorizont in dieser Reihenfolge:
+   Kernaussage · Muss enthalten · Auch richtig · Inhalt in Stufen · Reicht nicht ·
+   Häufiger Fehler.
+   - Nur die Stufen 100 / 75 / 50 / 25 / 0 Prozent. Kein 90.
+   - KEINE Sprachregeln, KEINEN Rechtschreibabzug, KEINE Punktzahlen in den Horizont —
+     das steht global in der Erweiterung und würde sich sonst widersprechen.
+   - „Auch richtig" ist der wichtigste Abschnitt. Formuliere so, wie Lernende dieser
+     Jahrgangsstufe tatsächlich schreiben.
+4. Gib je Aufgabe ein Schlagwort von zwei bis vier Wörtern an, das die Aufgabe benennt.
+
+ARBEITSWEISE
+Zeige mir zuerst je Aufgabe eine lesbare Übersicht (Nummer, Operator, AFB, Punkte,
+Schlagwort, Erwartungshorizont) und frage nach, ob sie passt. Ändere, bis ich zustimme.
+Stelle immer nur EINE Frage auf einmal.
+
+ERST WENN ICH BESTÄTIGE, gib genau EINEN Codeblock aus — nichts davor, nichts danach:
+
+\`\`\`json
+{ "aufgaben": [
+  { "nr": 1,
+    "schlagwort": "kurzes Stichwort",
+    "afb": "II-III",
+    "punkte": 4,
+    "operator": "Beschreibe / Erkläre",
+    "horizont": "<p><strong>Kernaussage:</strong> …</p><p><strong>Muss enthalten:</strong> …</p>" }
+] }
 \`\`\`
 
-Wichtig: Verwende sowohl im feedback- als auch im reasoning-Feld \n für Zeilenumbrüche zwischen Abschnitten. Jeder Abschnitt beginnt auf einer neuen Zeile.
+Das Feld "horizont" ist HTML (erlaubt: p, br, ul, li, strong, em). Keine Überschrift für
+die Aufgabe selbst — die setzt die Erweiterung. Keine Punktzahlen im Fließtext.`;
+  }
 
-Setze "reviewed": true für jeden Schüler, dessen Bewertung du gemeinsam mit dem Nutzer im interaktiven Review-Modus geprüft hast. Setze "reviewed": false wenn die Bewertung ohne Prüfung durch den Nutzer erstellt wurde.
+  function baueHorizontPrompt() {
+    const eigen = (E.promptHorizont || '').trim();
+    return (eigen || horizontPromptVorlage())
+      .replace('[MAG_RAHMENDATEN]', rahmendaten())
+      .replace('[MAG_GESAMTPUNKTE]', komma(leseGesamtpunkte() || '?'))
+      .replace('[MAG_AUFGABEN]', leseAufgabenstellung() || '[keine Aufgabenstellung gefunden]');
+  }
 
-Reasoning-Feld: Bei Feedbacklänge "Kurz" und "Mittel" das reasoning-Feld leer lassen ("reasoning": ""), da das Reasoning direkt ins Feedback integriert wird. Bei "Ausführlich" und "Umfangreich" ebenfalls leer lassen ("reasoning": ""), da das Feedback selbsterklärend ist.
+  const FB_LAENGE = {
+    'Kurz':        'ein bis zwei Sätze je Aufgabe',
+    'Mittel':      'drei bis vier Sätze je Aufgabe',
+    'Ausführlich': 'ein Absatz je Aufgabe mit konkretem Bezug auf die Antwort',
+    'Umfangreich': 'ein ausführlicher Absatz je Aufgabe, dazu ein eigener Abschnitt zur Operatorerfüllung'
+  };
 
-${batchDeliveryBlock}═══════════════════════════════════════════════════════
-MOODLE AI GRADER – BEWERTUNGSHORIZONT
-═══════════════════════════════════════════════════════
+  function korrekturPromptVorlage() {
+    return `Du bewertest Klausurantworten nach einem vorgegebenen Erwartungshorizont.
 
-${horizont || '[Kein Bewertungshorizont eingefügt – bitte zuerst Tab 1 verwenden]'}
+RAHMENDATEN
+[MAG_RAHMENDATEN]
 
-═══════════════════════════════════════════════════════
-MOODLE AI GRADER – SCHÜLERDATEN
-═══════════════════════════════════════════════════════
+ERWARTUNGSHORIZONT (gilt für alle Abgaben)
+[MAG_HORIZONT]
 
-[MOODLE_SCHÜLER_DATEN]
-${studentenJson}`;
+WICHTIG — WAS DU NICHT TUST
+Du vergibst KEINE Punkte und rechnest NICHT. Die Erweiterung rechnet Punkte, Rundung,
+Rechtschreibabzug und Gesamtsumme selbst. Du lieferst ausschließlich Prozentwerte,
+gezählte Fehler und Begründungstexte OHNE Zahlenangaben. Schreibe in keiner Begründung
+„x von y Punkten" — die Zahlen setzt die Erweiterung ein.
+
+JE AUFGABE
+Vergib einen Erfüllungsgrad in Prozent, nur diese Stufen: 100, 75, 50, 25, 0.
+Verankere jede Einstufung an einer Formulierung des Erwartungshorizonts.
+Prüfe dabei den Operator: Wer „erläutere" liest und nur beschreibt, erfüllt die Aufgabe
+nicht vollständig, auch wenn der Inhalt stimmt.
+
+JE ABGABE
+Zähle die sprachlichen Fehler und gib sie EINZELN an — Wort, Korrektur, Kategorie.
+Kategorien: satzbau · kasus · zeitform · grossschreibung · fachbegriff · rechtschreibung ·
+zeichensetzung · umgangssprache. Ein Satz ohne Prädikat, ein abgebrochener Satz oder ein
+Satzbau, den man zweimal lesen muss, zählt als "schwer": true. Denselben Fehler im selben
+Wort nur einmal zählen. Zähle vollständig — die Erweiterung leitet daraus den Abzug ab.
+
+FEEDBACKTEXTE
+Länge: [MAG_FBLAENGE]. Anrede: [MAG_ANREDE] … Sachlich, konkret, zugewandt.
+Bei Sprachfehlern den fehlerhaften Satz wörtlich zitieren und richtig danebenschreiben,
+nicht „achte auf die Satzstellung". Höchstens zwei bis drei Vorschläge.
+Jede Aufgabe bekommt eine Begründung — auch eine vollständig richtige.
+
+ABGABEN
+[MAG_ABGABEN]
+
+AUSGABE — genau EIN Codeblock, nichts davor, nichts danach:
+
+\`\`\`json
+{ "bewertungen": [
+  { "nr": 1,
+    "staerken": "was gut gelungen ist",
+    "aufgaben": [ { "nr": 1, "prozent": 75, "begruendung": "…", "operator": "erfüllt" } ],
+    "fehler": [ { "wort": "Atomradiuse", "korrektur": "Atomradien",
+                  "kategorie": "rechtschreibung", "schwer": false } ],
+    "sprachfeedback": "…",
+    "zusammenfassung": "…" }
+] }
+\`\`\`
+
+"nr" ist die Nummer der Abgabe aus dem Datenblock, nicht die des Schülers.
+Liefere für JEDE Abgabe des Blocks einen Eintrag, auch für leere Abgaben
+(dort alle Prozentwerte 0 und ein Hinweis in der Zusammenfassung).`;
+  }
+
+  function baueKorrekturPrompt(abgaben, horizontHtml, teil, gesamtTeile) {
+    const bloecke = zerlegeHorizont(horizontHtml);
+    const horizontText = bloecke.length
+      ? bloecke.map(b => b.kopf + '\n' + b.text).join('\n\n')
+      : htmlZuText(horizontHtml);
+
+    const daten = abgaben.map(a => {
+      const z = zerlegeAbgabe(a.rohHtml, a.text);
+      const kopf = 'ABGABE ' + a.nr + (z.gegliedert ? '' : '  (ohne Gliederung)');
+      const koerper = z.gegliedert
+        ? z.aufgaben.map(x => '  Aufgabe ' + x.nr + ':\n  ' + (x.text || '(leer)')).join('\n')
+        : '  ' + (a.text || '(leer)');
+      return kopf + '\n' + koerper;
+    }).join('\n\n');
+
+    const eigen = (E.promptKorrektur || '').trim();
+    let p = (eigen || korrekturPromptVorlage())
+      .replace('[MAG_RAHMENDATEN]', rahmendaten())
+      .replace('[MAG_HORIZONT]', horizontText || '[kein Horizont hinterlegt]')
+      .replace('[MAG_FBLAENGE]', FB_LAENGE[E.feedbacklaenge] || FB_LAENGE['Ausführlich'])
+      .replace('[MAG_ANREDE]', anrede())
+      .replace('[MAG_ABGABEN]', daten);
+
+    if (gesamtTeile > 1) {
+      p = 'TEIL ' + teil + ' VON ' + gesamtTeile + ' — bewerte NUR die unten stehenden Abgaben '
+        + 'und gib nur für sie JSON aus. Warte auf den nächsten Teil.\n\n' + p;
+    }
+    return p;
+  }
+
+  /* --- Feedbacktext zusammensetzen: die Zahlen kommen aus der Rechnung --- */
+
+  function baueFeedback(bewertung, rechnung, horizontBloecke) {
+    const abs = [];
+    if (bewertung.staerken) abs.push(bewertung.staerken.trim());
+
+    (bewertung.aufgaben || []).forEach(a => {
+      const t = rechnung.teil.find(x => x.nr === a.nr);
+      const block = (horizontBloecke || []).find(b => b.nr === a.nr);
+      const name = 'Aufgabe ' + a.nr + (block && block.kopf.includes('·')
+        ? ' – ' + block.kopf.split('·').slice(1).join('·').replace(/\(.*?\)/, '').trim() : '');
+      let zeile = name + ': ' + (t ? komma(t.punkte) : '?') + ' von ' + (t ? komma(Math.round(t.max * 100) / 100) : '?') + ' P.';
+      if (t && t.abzug > 0.004) zeile += ' (davon −' + komma(Math.round(t.abzug * 100) / 100) + ' P. Rechtschreibung)';
+      abs.push(zeile + '\n' + (a.begruendung || '').trim());
+    });
+
+    if (E.feedbacklaenge === 'Umfangreich') {
+      const ops = (bewertung.aufgaben || []).filter(a => a.operator);
+      if (ops.length) {
+        abs.push('Operatorerfüllung:\n' + ops.map(a => 'Aufgabe ' + a.nr + ': ' + a.operator).join('\n'));
+      }
     }
 
-    // Öffentliche Funktion: nutzt Override wenn vorhanden
-    function buildKorrekturPrompt(students, batchNum = 1, totalBatches = 1) {
-        if (appSettings.promptKorrektur) {
-            const horizont      = document.getElementById('mag-horizont-input').value.trim();
-            const studentenJson = JSON.stringify(students, null, 2);
-            const customBody = appSettings.promptKorrektur
-                .replace('[BEWERTUNGSHORIZONT_AUS_GENERATOR]', horizont || '[Kein Bewertungshorizont]')
-                .replace('[MOODLE_SCHÜLER_DATEN]', studentenJson);
-            // Batch-Kontext (Stopp-Regel / Fortsetzung) auch bei eigenem Prompt voranstellen,
-            // damit Batch 1 zuerst den Modus erfragt.
-            return buildBatchContextBlock(batchNum, totalBatches) + customBody;
-        }
-        return buildBatchContextBlock(batchNum, totalBatches) + getKorrekturPromptTemplate(students, batchNum, totalBatches);
-    }
-
-    // ── UI AUFBAUEN ──
-    const toggleBtn = document.createElement('button');
-    toggleBtn.id        = 'mag-toggle-btn';
-    toggleBtn.title     = 'Moodle AI Grader';
-    // Echtes Logo aus dem icons-Ordner anzeigen statt des 🪄-Emojis.
-    // Fällt auf das Emoji zurück, falls das Bild nicht geladen werden kann.
-    try {
-        const iconUrl = chrome.runtime.getURL('icons/icon128.png');
-        const iconImg = document.createElement('img');
-        iconImg.src   = iconUrl;
-        iconImg.alt   = 'MAG';
-        iconImg.className = 'mag-toggle-icon';
-        iconImg.addEventListener('error', () => {
-            iconImg.remove();
-            toggleBtn.textContent = '🪄';
-        });
-        toggleBtn.appendChild(iconImg);
-    } catch (e) {
-        toggleBtn.textContent = '🪄';
-    }
-    document.body.appendChild(toggleBtn);
-
-    const panel = document.createElement('div');
-    panel.id = 'moodle-ai-grader-panel';
-    panel.innerHTML = `
-        <header>
-            <span>🪄 Moodle AI Grader</span>
-            <div style="display:flex;gap:8px;align-items:center;">
-                <button id="mag-btn-settings" title="Einstellungen (Alt+Klick für erweiterte Optionen)" class="mag-icon-btn">⚙️</button>
-                <button id="mag-close" class="mag-icon-btn">✖</button>
-            </div>
-        </header>
-
-        <div id="mag-zustaendig" style="display:none;"></div>
-
-        <!-- TABS -->
-        <div class="mag-tabs">
-            <button class="mag-tab mag-tab-active" data-tab="horizont">📋 Bewertungshorizont</button>
-            <button class="mag-tab" data-tab="korrektur">✅ Korrektur</button>
-        </div>
-
-        <!-- TAB 1: BEWERTUNGSHORIZONT -->
-        <div class="mag-tab-content mag-content" id="mag-tab-horizont">
-            <div class="mag-step">
-                <div class="mag-step-header"><span class="mag-step-num">1</span> Fragen &amp; Punkte extrahieren</div>
-                <p class="mag-step-desc">Liest alle Aufgaben und Maximalpunkte aus Moodle aus und generiert den Prompt für den Bewertungshorizont-Generator.</p>
-                <div class="mag-flex-row">
-                    <button id="mag-btn-horizont-prompt" class="mag-btn mag-btn-primary" style="flex:4;margin:0;">Prompt für Bewertungshorizont kopieren</button>
-                    <button id="mag-btn-edit-horizont"   class="mag-btn mag-btn-outline" style="flex:1;margin:0;" title="Prompt bearbeiten">✏️</button>
-                </div>
-                <div id="mag-status-horizont" class="mag-status"></div>
-            </div>
-
-            <div class="mag-step">
-                <div class="mag-step-header">
-                    <span class="mag-step-num">2</span> Bewertungshorizont einfügen
-                    <button id="mag-btn-clear-horizont" title="Bewertungshorizont löschen" style="margin-left:auto;background:none;border:none;cursor:pointer;font-size:14px;color:#999;" >🗑️</button>
-                </div>
-                <p class="mag-step-desc">Füge hier den fertigen Bewertungshorizont aus dem KI-Chat ein.</p>
-                <textarea id="mag-horizont-input" rows="5" placeholder="Fertigen Bewertungshorizont hier einfügen …"></textarea>
-            </div>
-
-            <div class="mag-step" style="border-bottom:none;margin-bottom:0;">
-                <div class="mag-step-header"><span class="mag-step-num">3</span> Weiter zur Korrektur</div>
-                <p class="mag-step-desc">Wenn der Bewertungshorizont fertig ist, wechsle zum Korrektur-Tab.</p>
-                <button id="mag-btn-goto-korrektur" class="mag-btn mag-btn-success">→ Zum Korrektur-Tab</button>
-            </div>
-        </div>
-
-        <!-- TAB 2: KORREKTUR -->
-        <div class="mag-tab-content mag-content" id="mag-tab-korrektur" style="display:none;">
-
-            <div class="mag-step">
-                <div class="mag-step-header"><span class="mag-step-num">4</span> Batch-Größe wählen</div>
-                <p class="mag-step-desc">Das Plugin teilt die Schülerantworten in Batches auf. Die Größe wird automatisch vorgeschlagen.</p>
-                <div style="display:flex;align-items:center;gap:8px;">
-                    <label style="font-size:12px;color:#555;white-space:nowrap;">Schüler pro Batch:</label>
-                    <select id="mag-batch-size" style="flex:1;padding:6px;border:1px solid #ccc;border-radius:4px;font-size:13px;">
-                        <option value="5">5</option>
-                        <option value="6">6</option>
-                        <option value="8">8</option>
-                        <option value="10">10</option>
-                        <option value="12">12</option>
-                        <option value="15">15</option>
-                        <option value="20">20</option>
-                        <option value="30">30 (alle)</option>
-                    </select>
-                    <button id="mag-btn-download-raw" class="mag-btn mag-btn-outline" style="margin:0;padding:6px 10px;white-space:nowrap;">📋 Rohdaten</button>
-                </div>
-            </div>
-
-            <div class="mag-step">
-                <div class="mag-step-header"><span class="mag-step-num">5</span> Batches kopieren &amp; in KI einfügen</div>
-                <p class="mag-step-desc">Kopiere jeden Batch, füge ihn in die KI ein und warte auf die JSON-Antwort. Dann den nächsten Batch.</p>
-                <div id="mag-batch-buttons" style="display:flex;flex-direction:column;gap:6px;"></div>
-                <div id="mag-status-korrektur" class="mag-status"></div>
-                <div style="display:flex;align-items:center;gap:6px;margin-top:6px;">
-                    <button id="mag-btn-edit-korrektur" class="mag-btn mag-btn-outline" style="margin:0;padding:6px 10px;font-size:11px;">✏️ Prompt anpassen</button>
-                </div>
-            </div>
-
-            <div class="mag-step">
-                <div class="mag-step-header"><span class="mag-step-num">6</span> Alle JSON-Antworten einfügen</div>
-                <p class="mag-step-desc">Füge alle KI-Antworten nacheinander in das Feld ein. Die Batch-Markierungen (=== BATCH 1 ===) helfen beim Erkennen der Blöcke.</p>
-                <textarea id="mag-ai-json" rows="6" placeholder="Alle JSON-Antworten hier einfügen …&#10;&#10;=== BATCH 1 ===&#10;[{...}]&#10;=== ENDE BATCH 1 ===&#10;&#10;=== BATCH 2 ===&#10;[{...}]&#10;=== ENDE BATCH 2 ==="></textarea>
-                <button id="mag-btn-validate-json" class="mag-btn mag-btn-primary" style="margin-top:6px;">🔍 Validieren &amp; prüfen</button>
-                <div id="mag-status-validate" class="mag-status"></div>
-            </div>
-
-            <div class="mag-step" style="border-bottom:none;margin-bottom:0;">
-                <div class="mag-step-header"><span class="mag-step-num">7</span> Bewertungen eintragen</div>
-                <div class="mag-flex-row">
-                    <button id="mag-btn-start-review" class="mag-btn mag-btn-success" style="margin:0;" disabled>Review starten</button>
-                    <button id="mag-btn-paste-all"    class="mag-btn mag-btn-outline"  style="margin:0;" disabled>Alle eintragen</button>
-                </div>
-                <p id="mag-validate-hint" style="font-size:11px;color:#888;margin:6px 0 0;text-align:center;">Bitte zuerst validieren.</p>
-            </div>
-        </div>
-
-        <!-- SETTINGS PANEL (normales Zahnrad) -->
-        <div id="mag-settings-panel" style="display:none;">
-            <div class="mag-content">
-                <div class="mag-settings-title">⚙️ Einstellungen</div>
-                <div class="mag-group">
-                    <label>Fach</label>
-                    <input type="text" id="mag-fach" placeholder="z. B. Biologie, Geschichte …">
-                </div>
-                <div class="mag-group">
-                    <label>Jahrgang / Klassenstufe</label>
-                    <input type="text" id="mag-jahrgang" placeholder="z. B. 10, 12 …">
-                    <div class="mag-hint" id="mag-anrede-hint"></div>
-                </div>
-                <div class="mag-group">
-                    <label>Kursniveau</label>
-                    <select id="mag-kursniveau">
-                        <option value="G">G – Gymnasial</option>
-                        <option value="M">M – Mittel</option>
-                        <option value="E">E – Einfach</option>
-                    </select>
-                </div>
-                <div class="mag-group">
-                    <label>Punkteschritte</label>
-                    <select id="mag-punkteschritte">
-                        <option value="0.1">0,1 – Feine Schritte (empfohlen)</option>
-                        <option value="0.5">0,5 – Halbe Punkte</option>
-                        <option value="1.0">1,0 – Nur ganze Punkte</option>
-                    </select>
-                </div>
-                <div class="mag-group">
-                    <label>Rechtschreibgewichtung</label>
-                    <select id="mag-rechtschreibung">
-                        <option value="0">0 % – Kein Punktabzug (nur Feedback)</option>
-                        <option value="5">5 % – Sehr gering (z. B. Grundschule)</option>
-                        <option value="10" selected>10 % – Leicht (Standard, Mittelstufe)</option>
-                        <option value="15">15 % – Moderat (sprachbetonte Fächer)</option>
-                        <option value="20">20 % – Erhöht (z. B. Deutsch, Fremdsprachen)</option>
-                        <option value="25">25 % – Stark (Oberstufe, Klausuren)</option>
-                        <option value="30">30 % – Sehr stark (z. B. Sprachprüfungen)</option>
-                    </select>
-                </div>
-                <div class="mag-group">
-                    <label>Feedbacklänge</label>
-                    <select id="mag-feedbacklaenge">
-                        <option value="Ausführlich">Ausführlich (Standard)</option>
-                        <option value="Kurz">Kurz (1–2 Sätze)</option>
-                        <option value="Mittel">Mittel (3–4 Sätze)</option>
-                        <option value="Umfangreich">Umfangreich (Oberstufe)</option>
-                    </select>
-                </div>
-                <div class="mag-group">
-                    <label class="mag-checkbox-label">
-                        <input type="checkbox" id="mag-remove-citations"> Quellenangaben entfernen <span style="color:#888;font-size:11px;">([web:1] etc.)</span>
-                    </label>
-                    <label class="mag-checkbox-label" style="margin-top:6px;">
-                        <input type="checkbox" id="mag-ki-hinweis"> KI-Kommentar einfügen <span style="color:#888;font-size:11px;">(Transparenzhinweis am Ende)</span>
-                    </label>
-                </div>
-                <div class="mag-flex-row">
-                    <button id="mag-btn-save-settings"   class="mag-btn mag-btn-success" style="margin:0;">Speichern</button>
-                    <button id="mag-btn-cancel-settings" class="mag-btn mag-btn-secondary" style="margin:0;">Abbrechen</button>
-                </div>
-            </div>
-        </div>
-
-        <!-- PROMPT EDITOR -->
-        <div id="mag-prompt-editor" style="display:none;">
-            <div class="mag-content">
-                <div class="mag-settings-title" id="mag-prompt-editor-title">✏️ Prompt bearbeiten</div>
-                <p style="font-size:12px;color:#666;margin:0 0 6px;">
-                    Bearbeite den Prompt-Text direkt. Die Platzhalter
-                    <code style="background:#f0f0f0;padding:1px 4px;border-radius:3px;font-size:11px;">[MOODLE_AUFGABEN_DATEN]</code> und
-                    <code style="background:#f0f0f0;padding:1px 4px;border-radius:3px;font-size:11px;">[MOODLE_SCHÜLER_DATEN]</code>
-                    werden beim Kopieren automatisch befüllt.
-                </p>
-                <div id="mag-prompt-modified-badge" style="display:none;font-size:11px;color:#e67e00;margin-bottom:6px;">⚠️ Prompt wurde angepasst – weicht vom Original ab.</div>
-                <textarea id="mag-prompt-editor-text" style="width:100%;height:320px;font-family:monospace;font-size:11px;padding:8px;border:1px solid #ccc;border-radius:4px;box-sizing:border-box;resize:vertical;line-height:1.5;"></textarea>
-                <div class="mag-flex-row" style="margin-top:8px;">
-                    <button id="mag-btn-save-prompt"   class="mag-btn mag-btn-success"   style="margin:0;">Speichern</button>
-                    <button id="mag-btn-reset-prompt"  class="mag-btn mag-btn-outline"   style="margin:0;">↺ Original</button>
-                    <button id="mag-btn-cancel-prompt" class="mag-btn mag-btn-secondary" style="margin:0;">Abbrechen</button>
-                </div>
-            </div>
-        </div>
-    `;
-    document.body.appendChild(panel);
-
-    // Hinweis zur Zustaendigkeit einblenden, sobald das Panel steht.
-    (function magZustaendigkeitAnzeigen() {
-        const box = panel.querySelector('#mag-zustaendig');
-        if (!box) return;
-        const z = magZustaendigkeit();
-        if (z.wer === 'coach') {
-            box.style.display = 'block';
-            box.className = 'mag-zust mag-zust-warn';
-            box.textContent = '⚠️ Diese Frage ist für den Moodle AI Coach gebaut — ihr '
-                + 'Bewertungshorizont beginnt mit [moodle-ai-coach]. Du kannst sie trotzdem '
-                + 'hier bewerten; gedacht ist sie für den Coach auf der Übersichtsseite.';
-        } else if (z.wer === 'grader') {
-            box.style.display = 'block';
-            box.className = 'mag-zust mag-zust-ok';
-            box.textContent = '✅ Diese Frage ist für den Moodle AI Grader gebaut.';
-        } else if (!z.horizont) {
-            box.style.display = 'block';
-            box.className = 'mag-zust mag-zust-info';
-            box.textContent = 'ℹ️ Diese Frage hat keinen Bewertungshorizont in Moodle. '
-                + 'Leg ihn in Tab 1 an und trag ihn in die Frage ein — dann weiß auch der '
-                + 'Moodle AI Coach, dass sie ihm nicht gehört.';
-        }
-    })();
-
-    // ── REVIEW OVERLAY ──
-    const reviewOverlay = document.createElement('div');
-    reviewOverlay.id = 'mag-review-overlay';
-    reviewOverlay.innerHTML = `
-        <div id="mag-review-box">
-            <header>
-                <span id="rev-title">Bewertung</span>
-                <span id="rev-counter" style="font-size:13px;opacity:.85;"></span>
-            </header>
-            <div class="mag-review-body">
-                <div class="rev-block">
-                    <strong>Schülerantwort</strong>
-                    <textarea id="rev-answer" style="width:100%;min-height:80px;padding:6px;border:1px solid #ccc;border-radius:4px;box-sizing:border-box;resize:vertical;font-family:Arial,sans-serif;font-size:13px;background:#f8f9fa;" readonly></textarea>
-                </div>
-                <div class="rev-reasoning-box" id="rev-reasoning-box">
-                    <strong>KI-Begründung (nur für dich)</strong>
-                    <div id="rev-reasoning"></div>
-                </div>
-                <div class="rev-block">
-                    <strong>Punkte</strong>
-                    <input type="text" id="rev-points" style="width:100%;padding:6px;border:1px solid #ccc;border-radius:4px;box-sizing:border-box;">
-                </div>
-                <div class="rev-block">
-                    <strong>Feedback an Schüler</strong>
-                    <textarea id="rev-feedback" rows="10" style="width:100%;padding:6px;border:1px solid #ccc;border-radius:4px;box-sizing:border-box;resize:vertical;"></textarea>
-                </div>
-            </div>
-            <div class="mag-review-footer">
-                <button id="rev-btn-apply"        class="mag-btn mag-btn-primary"   style="margin:0;">✅ Eintragen &amp; Weiter</button>
-                <button id="rev-btn-skip"         class="mag-btn mag-btn-outline"   style="margin:0;">Überspringen</button>
-                <button id="rev-btn-close-review" class="mag-btn mag-btn-secondary" style="margin:0;">Abbrechen</button>
-            </div>
-        </div>
-    `;
-    document.body.appendChild(reviewOverlay);
-
-    // ── WARNING MODAL ──
-    const warningModal = document.createElement('div');
-    warningModal.id = 'mag-warning-modal';
-    warningModal.innerHTML = `
-        <div id="mag-warning-box">
-            <div class="mag-warning-icon">⚠️</div>
-            <h3 class="mag-warning-title">Bewertungen nicht geprüft</h3>
-            <p class="mag-warning-text">Die KI hat diese Bewertungen ohne interaktive Prüfung erstellt. KI-Bewertungen können Fehler enthalten – bitte prüfe sie bevor du sie einträgst.</p>
-            <div class="mag-warning-buttons">
-                <button id="mag-warn-review"  class="mag-btn mag-btn-primary"   style="margin:0;">👁️ Review starten</button>
-                <button id="mag-warn-confirm" class="mag-btn mag-btn-secondary" style="margin:0;">Trotzdem eintragen</button>
-                <button id="mag-warn-cancel"  class="mag-btn mag-btn-outline"   style="margin:0;">Abbrechen</button>
-            </div>
-        </div>
-    `;
-    document.body.appendChild(warningModal);
-
-    // ── EINSTELLUNGEN LADEN ──
-    function applySettingsToForm() {
-        const s = appSettings;
-        const set = (id, val) => { const el = document.getElementById(id); if (el) el.value = val; };
-        const setChk = (id, val) => { const el = document.getElementById(id); if (el) el.checked = val; };
-        set('mag-fach',           s.fach || '');
-        set('mag-jahrgang',       s.jahrgang || '');
-        set('mag-kursniveau',     s.kursniveau || 'G');
-        set('mag-punkteschritte', s.punkteschritte || '0.1');
-        set('mag-rechtschreibung',s.rechtschreibung || '10');
-        set('mag-feedbacklaenge', s.feedbacklaenge || 'Ausführlich');
-        setChk('mag-remove-citations', !!s.removeCitations);
-        setChk('mag-ki-hinweis',       s.kiHinweis !== false);
-        updateAnredeHint();
-    }
-
-    function updateAnredeHint() {
-        const hint = document.getElementById('mag-anrede-hint');
-        if (!hint) return;
-        const jg = parseInt(document.getElementById('mag-jahrgang')?.value, 10);
-        if (!isNaN(jg)) {
-            hint.textContent = jg >= 11 ? '→ Anrede im Feedback: „Sie haben …"' : '→ Anrede im Feedback: „Du hast …"';
-        } else {
-            hint.textContent = '';
-        }
-    }
-
-    function saveSettingsFromForm(callback) {
-        appSettings.fach            = document.getElementById('mag-fach').value.trim();
-        appSettings.jahrgang        = document.getElementById('mag-jahrgang').value.trim();
-        appSettings.kursniveau      = document.getElementById('mag-kursniveau').value;
-        appSettings.punkteschritte  = document.getElementById('mag-punkteschritte').value;
-        appSettings.rechtschreibung = document.getElementById('mag-rechtschreibung').value;
-        appSettings.feedbacklaenge  = document.getElementById('mag-feedbacklaenge').value;
-        appSettings.anonymize       = true; // immer aktiv
-        appSettings.removeCitations = document.getElementById('mag-remove-citations').checked;
-        appSettings.kiHinweis       = document.getElementById('mag-ki-hinweis').checked;
-        if (typeof chrome !== 'undefined' && chrome.storage) {
-            // Erst alten Eintrag löschen, dann neu setzen
-            chrome.storage.local.remove('magSettings', () => {
-                chrome.storage.local.set({ magSettings: appSettings }, () => {
-                    if (callback) callback();
-                });
-            });
-        } else {
-            if (callback) callback();
-        }
-    }
-
-    if (typeof chrome !== 'undefined' && chrome.storage) {
-        chrome.storage.local.get(['magSettings', 'magHorizont'], result => {
-            if (result.magSettings) {
-                // Vollständig überschreiben statt mergen um alte Werte zu vermeiden
-                appSettings = Object.assign({}, defaultSettings, result.magSettings);
-            }
-            if (result.magHorizont) {
-                const el = document.getElementById('mag-horizont-input');
-                if (el) el.value = result.magHorizont;
-            }
-            applySettingsToForm();
-        });
+    const fehler = bewertung.fehler || [];
+    let sprache = 'Rechtschreibung und Sprache: ';
+    if (rechnung.abzug > 0.004) {
+      sprache += 'Abzug ' + komma(rechnung.abzug) + ' von höchstens '
+               + komma(rechnung.hoechstabzug) + ' P. ('
+               + komma(rechnung.fehlerDichte) + ' Fehler je 100 Wörter).';
+    } else if (fehler.length) {
+      sprache += 'kein Punktabzug, aber ein paar Stellen zum Nachschauen.';
     } else {
-        applySettingsToForm();
+      sprache += 'keine Auffälligkeiten.';
     }
-
-    // ── STATUS MELDUNGEN ──
-    function showStatus(id, msg, isError) {
-        const el = document.getElementById(id);
-        if (!el) return;
-        el.textContent = msg;
-        el.style.color = isError ? '#c0392b' : '#27ae60';
-        el.style.display = 'block';
-        setTimeout(() => el.style.display = 'none', 3000);
+    if (fehler.length) {
+      sprache += '\n' + fehler.slice(0, 12).map(f =>
+        '• ' + (f.wort || '') + ' → ' + (f.korrektur || '')).join('\n');
+      if (fehler.length > 12) sprache += '\n• … und ' + (fehler.length - 12) + ' weitere';
     }
+    if (bewertung.sprachfeedback) sprache += '\n' + bewertung.sprachfeedback.trim();
+    abs.push(sprache);
 
-    // ── TAB WECHSEL ──
-    function switchTab(tabName) {
-        activeTab = tabName;
-        document.querySelectorAll('.mag-tab').forEach(t => {
-            t.classList.toggle('mag-tab-active', t.dataset.tab === tabName);
-        });
-        document.getElementById('mag-tab-horizont').style.display = tabName === 'horizont' ? 'block' : 'none';
-        document.getElementById('mag-tab-korrektur').style.display = tabName === 'korrektur' ? 'block' : 'none';
+    if (bewertung.zusammenfassung) abs.push(bewertung.zusammenfassung.trim());
+    abs.push('Gesamt: ' + komma(rechnung.gesamt) + ' von ' + komma(rechnung.max) + ' Punkten.');
+
+    return abs.filter(Boolean).map(quellenWeg).join('\n\n');
+  }
+
+  function feedbackAlsHtml(text) {
+    let html = text.split(/\n{2,}/)
+      .map(b => '<p>' + escapeHtml(b).replace(/\n/g, '<br>') + '</p>').join('');
+    if (E.kiHinweis) {
+      html += '<p><em><small>Dieses Feedback wurde von der Lehrkraft mithilfe von '
+            + 'KI-Unterstützung erstellt und geprüft.</small></em></p>';
     }
+    return html;
+  }
 
-    document.querySelectorAll('.mag-tab').forEach(tab => {
-        tab.addEventListener('click', () => switchTab(tab.dataset.tab));
-    });
+  /* ═══════════════════════════════════════════════════════════════════
+     9 · KI-ANTWORT EINLESEN
+     ═══════════════════════════════════════════════════════════════════ */
 
-    // ── PANEL SICHTBARKEIT ──
-    const PANELS = ['mag-tab-horizont', 'mag-tab-korrektur', 'mag-settings-panel', 'mag-prompt-editor'];
+  // Nimmt mehrere Teile in einem Rutsch an: Codebloecke, blanke Objekte, Arrays.
+  function leseJson(roh, schluessel) {
+    const treffer = [];
+    const bloecke = [];
+    const cb = /```(?:json)?\s*([\s\S]*?)```/g;
+    let m;
+    while ((m = cb.exec(roh)) !== null) bloecke.push(m[1]);
+    if (!bloecke.length) bloecke.push(roh);
 
-    function showPanel(name) {
-        // Tabs-Leiste: sichtbar nur bei Haupt-Ansicht
-        document.querySelector('.mag-tabs').style.display = name === 'main' ? 'flex' : 'none';
-        PANELS.forEach(id => {
-            const el = document.getElementById(id);
-            if (!el) return;
-            if (name === 'main') {
-                // Beide Tab-Inhalte: nur aktiver Tab sichtbar
-                if (id === 'mag-tab-horizont') el.style.display = activeTab === 'horizont' ? 'block' : 'none';
-                else if (id === 'mag-tab-korrektur') el.style.display = activeTab === 'korrektur' ? 'block' : 'none';
-                else el.style.display = 'none';
-            } else {
-                el.style.display = id === name ? 'block' : 'none';
-            }
-        });
-    }
-
-    // Alias für Lesbarkeit
-    function showMainView() { showPanel('main'); }
-
-    toggleBtn.addEventListener('click', () => {
-        panel.style.display = panel.style.display === 'none' ? 'block' : 'none';
-    });
-
-    document.getElementById('mag-close').addEventListener('click', () => {
-        panel.style.display = 'none';
-    });
-
-    // ── ZAHNRAD: normaler Klick = Einstellungen, Alt+Klick = Erweitert ──
-    document.getElementById('mag-btn-settings').addEventListener('click', () => {
-        applySettingsToForm();
-        showPanel('mag-settings-panel');
-    });
-
-    document.getElementById('mag-jahrgang').addEventListener('input', updateAnredeHint);
-
-    document.getElementById('mag-btn-save-settings').addEventListener('click', () => {
-        // Custom-Prompts zurücksetzen wenn Parameter geändert wurden
-        appSettings.promptHorizont  = null;
-        appSettings.promptKorrektur = null;
-        saveSettingsFromForm(() => {
-            showMainView();
-            alert('✅ Einstellungen gespeichert!');
-        });
-    });
-
-    document.getElementById('mag-btn-cancel-settings').addEventListener('click', showMainView);
-
-
-
-    // ── PROMPT EDITOR ──
-    let promptEditorTarget = null; // 'horizont' | 'korrektur'
-
-    function openPromptEditor(target) {
-        promptEditorTarget = target;
-        const isHorizont = target === 'horizont';
-        document.getElementById('mag-prompt-editor-title').textContent =
-            isHorizont ? '✏️ 1a – Bewertungshorizont-Prompt' : '✏️ 1b – Korrektur-Prompt';
-
-        // Aktuellen Text laden: Override wenn vorhanden, sonst Original
-        const current = isHorizont
-            ? (appSettings.promptHorizont || getTemplateForEditor(target))
-            : (appSettings.promptKorrektur || getTemplateForEditor(target));
-
-        document.getElementById('mag-prompt-editor-text').value = current;
-
-        // Badge zeigen wenn Override aktiv
-        const hasOverride = isHorizont ? !!appSettings.promptHorizont : !!appSettings.promptKorrektur;
-        document.getElementById('mag-prompt-modified-badge').style.display = hasOverride ? 'block' : 'none';
-
-        // Panel wechseln
-        showPanel('mag-prompt-editor');
-    }
-
-    function getTemplateForEditor(target) {
-        // Gibt den Template-Text ohne die dynamischen Daten zurück
-        if (target === 'horizont') {
-            return getHorizontPromptTemplate([]).split('\n' + JSON.stringify([], null, 2))[0]
-                .replace('\n[MOODLE_AUFGABEN_DATEN]\n[]', '\n[MOODLE_AUFGABEN_DATEN]');
-        } else {
-            return getKorrekturPromptTemplate([]).split('\n' + JSON.stringify([], null, 2))[0]
-                .replace('\n[MOODLE_SCHÜLER_DATEN]\n[]', '\n[MOODLE_SCHÜLER_DATEN]');
-        }
-    }
-
-    document.getElementById('mag-btn-edit-horizont').addEventListener('click', () => openPromptEditor('horizont'));
-    document.getElementById('mag-btn-edit-korrektur').addEventListener('click', () => openPromptEditor('korrektur'));
-
-    document.getElementById('mag-btn-save-prompt').addEventListener('click', () => {
-        const text = document.getElementById('mag-prompt-editor-text').value;
-        if (promptEditorTarget === 'horizont') {
-            appSettings.promptHorizont = text;
-        } else {
-            appSettings.promptKorrektur = text;
-        }
-        if (typeof chrome !== 'undefined' && chrome.storage) {
-            chrome.storage.local.set({ magSettings: appSettings });
-        }
-        showMainView();
-        showStatus(promptEditorTarget === 'horizont' ? 'mag-status-horizont' : 'mag-status-korrektur',
-            '✅ Prompt gespeichert!');
-    });
-
-    document.getElementById('mag-btn-reset-prompt').addEventListener('click', () => {
-        if (!confirm('Prompt auf Original zurücksetzen? Deine Änderungen gehen verloren.')) return;
-        if (promptEditorTarget === 'horizont') {
-            appSettings.promptHorizont = null;
-        } else {
-            appSettings.promptKorrektur = null;
-        }
-        if (typeof chrome !== 'undefined' && chrome.storage) {
-            chrome.storage.local.set({ magSettings: appSettings });
-        }
-        // Editor neu laden mit Original
-        document.getElementById('mag-prompt-editor-text').value = getTemplateForEditor(promptEditorTarget);
-        document.getElementById('mag-prompt-modified-badge').style.display = 'none';
-        showStatus(promptEditorTarget === 'horizont' ? 'mag-status-horizont' : 'mag-status-korrektur',
-            '✅ Original wiederhergestellt.');
-        showMainView();
-    });
-
-    document.getElementById('mag-btn-cancel-prompt').addEventListener('click', showMainView);
-
-    // ── TAB 1: BEWERTUNGSHORIZONT-PROMPT ──
-    document.getElementById('mag-btn-horizont-prompt').addEventListener('click', () => {
-        const questions = getQuestionsData();
-        if (!questions || questions.length === 0) return;
-        // Einstellungen frisch aus Storage laden bevor Prompt gebaut wird
-        const buildAndCopy = () => {
-            const prompt = buildHorizontPrompt(questions);
-            navigator.clipboard.writeText(prompt)
-                .then(() => showStatus('mag-status-horizont', '✅ Prompt für Bewertungshorizont kopiert!'))
-                .catch(() => showStatus('mag-status-horizont', '❌ Kopieren fehlgeschlagen.', true));
-        };
-        if (typeof chrome !== 'undefined' && chrome.storage) {
-            chrome.storage.local.get(['magSettings'], result => {
-                if (result.magSettings) appSettings = Object.assign({}, defaultSettings, result.magSettings);
-                buildAndCopy();
-            });
-        } else {
-            buildAndCopy();
-        }
-    });
-
-    // Horizont automatisch in Storage speichern wenn sich der Text ändert
-    document.getElementById('mag-horizont-input').addEventListener('input', () => {
-        const val = document.getElementById('mag-horizont-input').value;
-        if (typeof chrome !== 'undefined' && chrome.storage) {
-            chrome.storage.local.set({ magHorizont: val });
-        }
-    });
-
-    document.getElementById('mag-btn-clear-horizont').addEventListener('click', () => {
-        if (document.getElementById('mag-horizont-input').value.trim() === '') return;
-        if (!confirm('Bewertungshorizont wirklich löschen?')) return;
-        document.getElementById('mag-horizont-input').value = '';
-        if (typeof chrome !== 'undefined' && chrome.storage) {
-            chrome.storage.local.remove('magHorizont');
-        }
-    });
-
-    document.getElementById('mag-btn-goto-korrektur').addEventListener('click', () => {
-        const horizont = document.getElementById('mag-horizont-input').value.trim();
-        if (!horizont) {
-            if (!confirm('Kein Bewertungshorizont eingefügt. Trotzdem zum Korrektur-Tab wechseln?')) return;
-        }
-        switchTab('korrektur');
-        applyBatchDefault();
-    });
-
-    // ── TAB 2: BATCH-SYSTEM ──
-
-    // Vorgeschlagene Batch-Größe je Feedbacklänge
-    const BATCH_DEFAULTS = { 'Kurz': 30, 'Mittel': 15, 'Ausführlich': 10, 'Umfangreich': 6 };
-    let validatedData = null; // gespeicherte validierte Daten
-
-    function getBatchSize() {
-        return parseInt(document.getElementById('mag-batch-size').value, 10) || 10;
-    }
-
-    function renderBatchButtons() {
-        const students = getStudentData();
-        if (!students || students.length === 0) return;
-        const batchSize  = getBatchSize();
-        const total      = students.length;
-        const numBatches = Math.ceil(total / batchSize);
-        const container  = document.getElementById('mag-batch-buttons');
-        container.innerHTML = '';
-
-        for (let b = 0; b < numBatches; b++) {
-            const start  = b * batchSize;
-            const end    = Math.min(start + batchSize, total);
-            const batch  = students.slice(start, end);
-            const isLast = b === numBatches - 1;
-
-            const btn = document.createElement('button');
-            btn.className = 'mag-btn mag-btn-primary';
-            btn.style.margin = '0';
-            btn.textContent = `Batch ${b + 1} kopieren (Schüler ${start + 1}–${end})`;
-            btn.addEventListener('click', () => {
-                const horizont = document.getElementById('mag-horizont-input').value.trim();
-                if (!horizont) {
-                    showStatus('mag-status-korrektur', '⚠️ Kein Bewertungshorizont – bitte erst Tab 1 verwenden.', true);
-                    return;
-                }
-                // Einstellungen frisch aus Storage laden bevor Prompt gebaut wird
-                const buildAndCopy = () => {
-                    const prompt = buildKorrekturPromptBatch(batch, b + 1, numBatches);
-                    navigator.clipboard.writeText(prompt).then(() => {
-                        const nextMsg = isLast
-                            ? `✅ Batch ${b + 1} kopiert! Füge jetzt alle KI-Antworten nacheinander in das Feld unten ein und klicke auf Validieren.`
-                            : `✅ Batch ${b + 1} kopiert! Füge die KI-Antwort unten ein, dann kopiere Batch ${b + 2}.`;
-                        showStatus('mag-status-korrektur', nextMsg);
-                    }).catch(() => showStatus('mag-status-korrektur', '❌ Kopieren fehlgeschlagen.', true));
-                };
-                if (typeof chrome !== 'undefined' && chrome.storage) {
-                    chrome.storage.local.get(['magSettings'], result => {
-                        if (result.magSettings) appSettings = Object.assign({}, defaultSettings, result.magSettings);
-                        buildAndCopy();
-                    });
-                } else {
-                    buildAndCopy();
-                }
-            });
-            container.appendChild(btn);
-        }
-    }
-
-    // Batch-Größe automatisch vorschlagen wenn Tab geöffnet wird
-    function applyBatchDefault() {
-        const fl  = appSettings.feedbacklaenge || 'Ausführlich';
-        const def = BATCH_DEFAULTS[fl] || 10;
-        const sel = document.getElementById('mag-batch-size');
-        // Nächste Option wählen
-        let best = '10';
-        Array.from(sel.options).forEach(o => {
-            if (parseInt(o.value) <= def) best = o.value;
-        });
-        sel.value = best;
-        renderBatchButtons();
-    }
-
-    document.getElementById('mag-batch-size').addEventListener('change', renderBatchButtons);
-
-    // Beim Tab-Wechsel Buttons rendern
-    const origSwitchTab = switchTab;
-    switchTab = function(tabName) {
-        origSwitchTab(tabName);
-        if (tabName === 'korrektur') {
-            applyBatchDefault();
-        }
-    };
-
-    // Korrektur-Prompt für einen Batch generieren.
-    // Die Batch-Info wird jetzt in den Prompt integriert (Stopp-Regel oben,
-    // Liefermechanismus unten) statt widersprüchlich ans Ende angehängt.
-    function buildKorrekturPromptBatch(students, batchNum, totalBatches) {
-        return buildKorrekturPrompt(students, batchNum, totalBatches);
-    }
-
-    // ── ROHDATEN KOPIEREN ──
-    document.getElementById('mag-btn-download-raw').addEventListener('click', () => {
-        const questions = getQuestionsData();
-        const students  = getStudentData();
-        if (!questions || !students) return;
-        const exportData = {
-            exportiert_am: new Date().toLocaleString('de-DE'),
-            fach:          appSettings.fach     || '',
-            jahrgang:      appSettings.jahrgang || '',
-            aufgaben:      questions,
-            schueler:      students
-        };
-        navigator.clipboard.writeText(JSON.stringify(exportData, null, 2))
-            .then(() => showStatus('mag-status-korrektur', '✅ Rohdaten kopiert!'))
-            .catch(() => showStatus('mag-status-korrektur', '❌ Kopieren fehlgeschlagen.', true));
-    });
-
-    // ── JSON VALIDIERUNG ──
-    function parseAllBatches(raw) {
-        const results = [];
-
-        // Strategie 1: Batch-Markierungen === BATCH N === ... === ENDE BATCH N ===
-        const batchRegex = /=== BATCH \d+ ===\s*([\s\S]*?)\s*=== ENDE BATCH \d+ ===/g;
-        let match;
-        let foundBatches = false;
-        while ((match = batchRegex.exec(raw)) !== null) {
-            foundBatches = true;
-            const clean = match[1].replace(/```json/gi, '').replace(/```/g, '').trim();
-            const parsed = JSON.parse(clean);
-            results.push(...(Array.isArray(parsed) ? parsed : [parsed]));
-        }
-        if (foundBatches) return results;
-
-        // Strategie 2: Mehrere ```json ... ``` Blöcke
-        const codeBlockRegex = /```json\s*([\s\S]*?)```/g;
-        let foundBlocks = false;
-        while ((match = codeBlockRegex.exec(raw)) !== null) {
-            foundBlocks = true;
-            const parsed = JSON.parse(match[1].trim());
-            results.push(...(Array.isArray(parsed) ? parsed : [parsed]));
-        }
-        if (foundBlocks) return results;
-
-        // Strategie 3: Alle [...] Arrays im Text finden
-        const arrayRegex = /\[\s*\{[\s\S]*?\}\s*\]/g;
-        let foundArrays = false;
-        while ((match = arrayRegex.exec(raw)) !== null) {
-            try {
-                const parsed = JSON.parse(match[0]);
-                if (Array.isArray(parsed) && parsed.length > 0 && parsed[0].id !== undefined) {
-                    foundArrays = true;
-                    results.push(...parsed);
-                }
-            } catch(e) { /* ungültiger Block, weiter */ }
-        }
-        if (foundArrays) return results;
-
-        // Strategie 4: Gesamten Text als ein JSON parsen (letzter Fallback)
-        const clean = raw.replace(/```json/gi, '').replace(/```/g, '').trim();
-        const parsed = JSON.parse(clean);
-        return Array.isArray(parsed) ? parsed : [parsed];
-    }
-
-    function validateData(data) {
-        const ids     = data.map(d => d.id).sort((a, b) => a - b);
-        const missing = [];
-        const dupes   = [];
-        const seen    = new Set();
-
-        for (let i = 0; i < ids.length; i++) {
-            if (seen.has(ids[i])) dupes.push(ids[i]);
-            seen.add(ids[i]);
-        }
-        // Lücken finden
-        if (ids.length > 0) {
-            for (let i = ids[0]; i <= ids[ids.length - 1]; i++) {
-                if (!seen.has(i)) missing.push(i);
-            }
-        }
-        return { missing, dupes, ids };
-    }
-
-    document.getElementById('mag-btn-validate-json').addEventListener('click', () => {
-        const raw = document.getElementById('mag-ai-json').value.trim();
-        if (!raw) {
-            showStatus('mag-status-validate', '⚠️ Bitte zuerst JSON einfügen.', true);
-            return;
-        }
+    bloecke.forEach(b => {
+      const text = b.trim();
+      if (!text) return;
+      try {
+        const o = JSON.parse(text);
+        const liste = Array.isArray(o) ? o : (o[schluessel] || (o.nr != null ? [o] : null));
+        if (liste) treffer.push(...liste);
+        return;
+      } catch (e) { /* weiter mit der Suche nach Teilobjekten */ }
+      const objekt = text.match(/\{[\s\S]*\}/);
+      if (objekt) {
         try {
-            const data = parseAllBatches(raw).map(item => ({
-                ...item,
-                feedback:  cleanCitations(item.feedback  || ''),
-                reasoning: cleanCitations(item.reasoning || '')
-            }));
+          const o = JSON.parse(objekt[0]);
+          const liste = Array.isArray(o) ? o : (o[schluessel] || (o.nr != null ? [o] : null));
+          if (liste) treffer.push(...liste);
+        } catch (e) { /* dieser Block ist unbrauchbar */ }
+      }
+    });
+    if (!treffer.length) throw new Error('Kein verwertbares JSON gefunden.');
+    return treffer;
+  }
 
-            const { missing, dupes, ids } = validateData(data);
+  // Vollstaendigkeit pruefen: fehlende und doppelte Nummern melden statt still eintragen.
+  function pruefeVollstaendig(liste, sollNummern) {
+    const gesehen = new Set();
+    const doppelt = [];
+    liste.forEach(e => {
+      const n = Number(e.nr);
+      if (gesehen.has(n)) doppelt.push(n);
+      gesehen.add(n);
+    });
+    const fehlend = sollNummern.filter(n => !gesehen.has(n));
+    return { fehlend, doppelt };
+  }
 
-            if (dupes.length > 0) {
-                showStatus('mag-status-validate', `❌ Doppelte IDs gefunden: ${dupes.join(', ')} – bitte prüfen.`, true);
-                return;
-            }
-            if (missing.length > 0) {
-                showStatus('mag-status-validate', `❌ Fehlende IDs: ${missing.join(', ')} – bitte fehlenden Batch einfügen.`, true);
-                return;
-            }
+  /* ═══════════════════════════════════════════════════════════════════
+     10 · BEWERTUNGEN EINTRAGEN  (Bewertungsseite)
 
-            // Alles OK
-            validatedData = data;
-            showStatus('mag-status-validate', `✅ ${data.length} Schüler vollständig (IDs ${ids[0]}–${ids[ids.length-1]}). Bereit zum Eintragen.`);
+     Wie im Reviewer: Formular frisch holen, Felder setzen, absenden, neu holen und
+     jeden Wert gegenpruefen. Es wird nichts als Erfolg gemeldet, was nicht wirklich
+     angekommen ist.
+     ═══════════════════════════════════════════════════════════════════ */
 
-            // Buttons freischalten
-            document.getElementById('mag-btn-start-review').disabled = false;
-            document.getElementById('mag-btn-paste-all').disabled    = false;
-            document.getElementById('mag-validate-hint').style.display = 'none';
+  async function holeBewertungsFormular(zweiterVersuch) {
+    const dok = await holeDok(location.href);
+    let form = dok.querySelector('form#manualgradingform')
+            || [...dok.forms].find(f => f.querySelector('input[name$="-mark"]'));
+    if (!form && !zweiterVersuch) {
+      // Direkt nach einem Speichern liefert Moodle die Seite gelegentlich unvollstaendig.
+      await new Promise(r => setTimeout(r, 900));
+      return holeBewertungsFormular(true);
+    }
+    if (!form) throw new Error('Bewertungsformular nicht gefunden');
+    return { dok, form };
+  }
 
-        } catch (e) {
-            showStatus('mag-status-validate', '❌ Ungültiges JSON: ' + e.message, true);
-        }
+  // eintraege: [{ markfeld, kommentarfeld, punkte, feedbackHtml, nr }]
+  // trocken = true → nur pruefen, ob jedes Feld da ist; nichts absenden.
+  async function trageEin(eintraege, trocken, log) {
+    const { form } = await holeBewertungsFormular(false);
+    const felder = formularFelder(form);
+
+    const gesetzt = [];
+    let fehlend = 0;
+    eintraege.forEach(e => {
+      const hatMark = felder.has(e.markfeld);
+      const hatKomm = !e.kommentarfeld || felder.has(e.kommentarfeld);
+      if (!hatMark || !hatKomm) {
+        fehlend++;
+        log('✗ Abgabe ' + e.nr + ': ' + (!hatMark ? 'Punktefeld' : 'Kommentarfeld') + ' nicht auf der Seite');
+        return;
+      }
+      if (!trocken) {
+        felder.set(e.markfeld, komma(e.punkte));
+        if (e.kommentarfeld) felder.set(e.kommentarfeld, e.feedbackHtml);
+      }
+      gesetzt.push(e);
     });
 
-    function pasteAll(data) {
-        let count = 0;
-        data.forEach(item => { if (writeToMoodle(item.id, item.points, item.feedback)) count++; });
-        alert(`✅ ${count} von ${data.length} Bewertungen eingetragen!`);
+    if (trocken) {
+      log(gesetzt.length + ' von ' + eintraege.length + ' Abgaben vollständig vorhanden.');
+      return { ok: gesetzt.length, fehler: fehlend, trocken: true };
+    }
+    if (!gesetzt.length) return { ok: 0, fehler: eintraege.length };
+
+    await sendeFormular(form, felder, location.href);
+
+    // Gegenprobe an einer frisch geholten Seite
+    const { form: kform } = await holeBewertungsFormular(false);
+    let ok = 0, fehler = fehlend;
+    gesetzt.forEach(e => {
+      const f = kform.querySelector('input[name="' + CSS.escape(e.markfeld) + '"]');
+      const ist = f ? zahl(f.value) : null;
+      if (ist !== null && Math.abs(ist - e.punkte) < 0.005) {
+        ok++;
+        log('✓ Abgabe ' + e.nr + ' — ' + komma(e.punkte) + ' P. eingetragen');
+      } else {
+        fehler++;
+        log('✗ Abgabe ' + e.nr + ' — steht auf '
+          + (ist == null ? 'keinem Wert' : komma(ist)) + ' statt ' + komma(e.punkte));
+      }
+    });
+    return { ok, fehler };
+  }
+
+  /* ═══════════════════════════════════════════════════════════════════
+     11 · OBERFLAECHE
+
+     Panel-Regeln: Eingabefelder stehen UNTER ihrer Beschriftung und fuellen die
+     Breite; Fortschritt und Protokoll stehen UEBER den Knoepfen, sonst laufen sie
+     aus dem Sichtfeld und die Erweiterung wirkt tot.
+     ═══════════════════════════════════════════════════════════════════ */
+
+  const REITER = KONTEXT === 'bearbeiten'
+    ? [['horizont', 'Erwartungshorizont'], ['vorlage', 'Antwortvorlage']]
+    : [['korrektur', 'Korrektur'], ['horizont', 'Erwartungshorizont']];
+
+  const panel = el('div', 'mag-panel');
+  panel.innerHTML = `
+    <div class="mag-kopf">
+      <span class="mag-titel">Moodle AI Grader</span>
+      <button class="mag-ikon" data-tu="einst" title="Einstellungen">⚙</button>
+      <button class="mag-ikon" data-tu="zu" title="Schließen">✖</button>
+    </div>
+    <div class="mag-banner" hidden></div>
+    <div class="mag-reiter">
+      ${REITER.map((r, i) => `<button class="mag-tab${i === 0 ? ' aktiv' : ''}" data-tab="${r[0]}">${r[1]}</button>`).join('')}
+    </div>
+
+    <div class="mag-inhalt" data-panel="horizont">
+      <div class="mag-status" data-rolle="hstatus"></div>
+      <label>1 · Prompt für die KI</label>
+      <div class="mag-reihe">
+        <button class="mag-btn mag-btn-primary" data-tu="hprompt">📋 Prompt kopieren</button>
+        <button class="mag-btn mag-btn-rand" data-tu="hedit" title="Prompt anpassen">✏️</button>
+      </div>
+      <label>2 · Antwort der KI einfügen</label>
+      <textarea data-rolle="hjson" rows="5" placeholder='{ "aufgaben": [ … ] }'></textarea>
+      <button class="mag-btn mag-btn-primary" data-tu="hpruefen">🔍 Prüfen</button>
+      <div class="mag-liste" data-rolle="hliste"></div>
+      <div class="mag-protokoll" data-rolle="hlog" hidden></div>
+      <div class="mag-reihe" data-rolle="hknoepfe" hidden>
+        <button class="mag-btn mag-btn-rand" data-tu="htrocken">Trockenlauf</button>
+        <button class="mag-btn mag-btn-ok" data-tu="hschreiben">In die Frage eintragen</button>
+      </div>
+      <details class="mag-details">
+        <summary>Kein Bearbeitungsrecht? Horizont hier behalten</summary>
+        <p class="mag-hinweis">Wer Fragen nicht bearbeiten darf, klebt den fertigen Horizont
+        hierher. Er bleibt dann in der Erweiterung statt in der Frage.</p>
+        <textarea data-rolle="hlokal" rows="4" placeholder="Erwartungshorizont …"></textarea>
+        <button class="mag-btn mag-btn-rand" data-tu="hlokalsichern">Hier speichern</button>
+      </details>
+    </div>
+
+    <div class="mag-inhalt" data-panel="vorlage" hidden>
+      <div class="mag-status" data-rolle="vstatus"></div>
+      <p class="mag-hinweis">Die Antwortvorlage wird den Lernenden beim Öffnen der Frage in
+      das Eingabefeld geladen. Sie entsteht aus demselben Durchgang wie der Horizont.</p>
+      <label>Aussehen</label>
+      <label class="mag-haken"><input type="checkbox" data-opt="afbFarben"> Farben nach AFB statt neutral</label>
+      <label class="mag-haken"><input type="checkbox" data-opt="vorlagePunkte"> Punkte in der Kopfzeile</label>
+      <label class="mag-haken"><input type="checkbox" data-opt="vorlageAfb"> AFB in der Kopfzeile</label>
+      <label>Vorschau</label>
+      <div class="mag-vorschau" data-rolle="vvorschau"></div>
+      <div class="mag-protokoll" data-rolle="vlog" hidden></div>
+      <button class="mag-btn mag-btn-ok" data-tu="beides">Horizont + Antwortvorlage eintragen</button>
+      <div class="mag-reihe">
+        <button class="mag-btn mag-btn-klein" data-tu="kopierh">📋 nur Horizont</button>
+        <button class="mag-btn mag-btn-klein" data-tu="kopierv">📋 nur Antwortvorlage</button>
+      </div>
+    </div>
+
+    <div class="mag-inhalt" data-panel="korrektur" hidden>
+      <div class="mag-status" data-rolle="kstatus"></div>
+      <label>Abgaben je Durchgang</label>
+      <select data-rolle="kgroesse"></select>
+      <div class="mag-hinweis" data-rolle="kgroessehinweis"></div>
+      <label>1 · Prompt für die KI</label>
+      <div class="mag-reihe" data-rolle="kknoepfe"></div>
+      <div class="mag-reihe">
+        <button class="mag-btn mag-btn-rand mag-btn-klein" data-tu="kedit">✏️ Prompt anpassen</button>
+        <button class="mag-btn mag-btn-rand mag-btn-klein" data-tu="krohdaten">📋 Rohdaten</button>
+      </div>
+      <label>2 · Antworten der KI einfügen</label>
+      <textarea data-rolle="kjson" rows="5" placeholder='{ "bewertungen": [ … ] }'></textarea>
+      <button class="mag-btn mag-btn-primary" data-tu="kpruefen">🔍 Prüfen</button>
+      <div class="mag-liste" data-rolle="kliste"></div>
+      <div class="mag-protokoll" data-rolle="klog" hidden></div>
+      <div class="mag-reihe" data-rolle="keintragen" hidden>
+        <button class="mag-btn mag-btn-rand" data-tu="ktrocken">Trockenlauf</button>
+        <button class="mag-btn mag-btn-ok" data-tu="kschreiben">Alle eintragen</button>
+      </div>
+    </div>
+
+    <div class="mag-inhalt" data-panel="einst" hidden>
+      <label>Fach</label><input type="text" data-opt="fach" placeholder="z. B. Chemie">
+      <label>Jahrgang</label><input type="text" data-opt="jahrgang" placeholder="z. B. 10">
+      <div class="mag-hinweis" data-rolle="anredehinweis"></div>
+      <label>Kursniveau</label>
+      <select data-opt="kursniveau">
+        <option value="G">G — gymnasial</option>
+        <option value="M">M — mittel</option>
+        <option value="E">E — einfach</option>
+      </select>
+      <label>Punkteschritte</label>
+      <select data-opt="punkteschritte">
+        <option value="0.25">0,25</option><option value="0.5">0,5 (Standard)</option>
+        <option value="1">1,0 — nur ganze Punkte</option>
+      </select>
+      <label>Rechtschreibung: Höchstabzug in % der Gesamtpunktzahl</label>
+      <select data-opt="rechtschreibung">
+        <option value="0">0 % — kein Abzug</option><option value="5">5 %</option>
+        <option value="10">10 % (Standard Mittelstufe)</option><option value="15">15 %</option>
+        <option value="20">20 %</option><option value="25">25 % (Oberstufe, Klausuren)</option>
+        <option value="30">30 %</option>
+      </select>
+      <label>Rechtschreibung: Strenge der Stufen</label>
+      <select data-opt="rsStrenge">
+        <option value="keine">keine — nur Feedback, kein Abzug</option>
+        <option value="mild">mild</option>
+        <option value="normal">normal (Standard)</option>
+        <option value="streng">streng</option>
+      </select>
+      <div class="mag-hinweis" data-rolle="rshinweis"></div>
+      <label>Feedbacklänge</label>
+      <select data-opt="feedbacklaenge">
+        <option value="Kurz">Kurz</option><option value="Mittel">Mittel</option>
+        <option value="Ausführlich">Ausführlich (Standard)</option>
+        <option value="Umfangreich">Umfangreich — mit Operatorerfüllung</option>
+      </select>
+      <label class="mag-haken"><input type="checkbox" data-opt="kiHinweis"> KI-Transparenzhinweis unter das Feedback</label>
+      <label class="mag-haken"><input type="checkbox" data-opt="entferneQuellen"> Quellenangaben entfernen</label>
+      <div class="mag-reihe">
+        <button class="mag-btn mag-btn-ok" data-tu="esichern">Speichern</button>
+        <button class="mag-btn mag-btn-grau" data-tu="eabbruch">Abbrechen</button>
+      </div>
+    </div>
+
+    <div class="mag-inhalt" data-panel="prompt" hidden>
+      <label data-rolle="ptitel">Prompt bearbeiten</label>
+      <textarea data-rolle="ptext" rows="16"></textarea>
+      <div class="mag-reihe">
+        <button class="mag-btn mag-btn-ok" data-tu="psichern">Speichern</button>
+        <button class="mag-btn mag-btn-rand" data-tu="pzurueck">↺ Original</button>
+        <button class="mag-btn mag-btn-grau" data-tu="pabbruch">Abbrechen</button>
+      </div>
+    </div>`;
+
+  const knopf = el('button', 'mag-knopf', 'AI');
+  knopf.title = 'Moodle AI Grader';
+
+  const R = rolle => panel.querySelector('[data-rolle="' + rolle + '"]');
+  const P = name  => panel.querySelector('[data-panel="' + name + '"]');
+
+  /* --- Zustand --- */
+  let horizontAufgaben = null;   // aus der KI gelesen, noch nicht geschrieben
+  let bewertungen      = null;   // geprüfte Bewertungen
+  let eintragungen     = null;   // fertig gerechnete Einträge
+  let letzterReiter    = REITER[0][0];
+
+  /* --- Bearbeiten-URL der Frage, auch von der Bewertungsseite aus --- */
+  function frageBearbeitenUrl() {
+    if (KONTEXT === 'bearbeiten') return location.href;
+    const p = new URLSearchParams(location.search);
+    const qid = p.get('qid'), cmid = p.get('id') || p.get('cmid');
+    if (!qid) return null;
+    return location.origin + '/question/bank/editquestion/question.php?id=' + qid
+         + (cmid ? '&cmid=' + cmid : '');
+  }
+
+  /* --- Statuszeilen und Protokoll --- */
+  function status(rolle, text, fehler) {
+    const n = R(rolle);
+    if (!n) return;
+    n.textContent = text || '';
+    n.className = 'mag-status' + (text ? (fehler ? ' fehler' : ' ok') : '');
+  }
+  function protokoll(rolle) {
+    const n = R(rolle);
+    n.hidden = false; n.innerHTML = '';
+    return zeile => { n.appendChild(el('div', 'mag-logzeile', zeile)); n.scrollTop = n.scrollHeight; };
+  }
+
+  /* --- Einstellungen --- */
+  function ladeEinstellungen() {
+    return new Promise(fertig => {
+      if (!(typeof chrome !== 'undefined' && chrome.storage)) return fertig();
+      chrome.storage.local.get(['magSettings'], r => {
+        if (r.magSettings) E = Object.assign({}, STANDARD, r.magSettings);
+        fertig();
+      });
+    });
+  }
+  function sichereEinstellungen() {
+    if (typeof chrome !== 'undefined' && chrome.storage) chrome.storage.local.set({ magSettings: E });
+  }
+  function formularAusEinstellungen() {
+    panel.querySelectorAll('[data-opt]').forEach(f => {
+      const k = f.dataset.opt;
+      if (f.type === 'checkbox') f.checked = !!E[k]; else f.value = E[k] == null ? '' : E[k];
+    });
+    hinweiseAktualisieren();
+  }
+  function einstellungenAusFormular() {
+    panel.querySelectorAll('[data-opt]').forEach(f => {
+      const k = f.dataset.opt;
+      E[k] = (f.type === 'checkbox') ? f.checked : f.value;
+    });
+    // Eigene Prompts zurücksetzen: sonst bleiben veraltete Parameter eingebettet.
+    E.promptHorizont = null;
+    E.promptKorrektur = null;
+    sichereEinstellungen();
+    hinweiseAktualisieren();
+  }
+  function hinweiseAktualisieren() {
+    const a = R('anredehinweis');
+    if (a) a.textContent = 'Im Feedback wird „' + anrede() + ' …" verwendet.';
+    const rs = R('rshinweis');
+    if (rs) {
+      if (E.rsStrenge === 'keine' || parseFloat(E.rechtschreibung) === 0) {
+        rs.textContent = 'Kein Punktabzug — das Sprachfeedback wird trotzdem geschrieben.';
+      } else {
+        const l = RS_STUFEN[E.rsStrenge] || RS_STUFEN.normal;
+        rs.textContent = 'Voller Abzug ab ' + komma(l[2][0]) + ' Fehlern je 100 Wörtern; '
+          + 'unter ' + MINDESTWOERTER + ' Wörtern zählt die absolute Fehlerzahl.';
+      }
+    }
+    const v = R('vvorschau');
+    if (v) v.innerHTML = horizontAufgaben ? baueAntwortvorlage(horizontAufgaben)
+      : '<p class="mag-hinweis">Erst im Reiter „Erwartungshorizont" die KI-Antwort einlesen.</p>';
+  }
+
+  /* --- Reiter --- */
+  function zeige(name) {
+    panel.querySelectorAll('.mag-inhalt').forEach(n => { n.hidden = n.dataset.panel !== name; });
+    panel.querySelectorAll('.mag-tab').forEach(t => t.classList.toggle('aktiv', t.dataset.tab === name));
+    const istReiter = REITER.some(r => r[0] === name);
+    panel.querySelector('.mag-reiter').hidden = !istReiter;
+    if (istReiter) letzterReiter = name;
+    if (name === 'vorlage') hinweiseAktualisieren();
+    if (name === 'korrektur') stapelAufbauen();
+  }
+
+  /* --- Zwischenablage --- */
+  function kopiere(text, rolle, meldung) {
+    navigator.clipboard.writeText(text)
+      .then(() => status(rolle, meldung + '  (' + text.length.toLocaleString('de-DE') + ' Zeichen)'))
+      .catch(() => status(rolle, 'Kopieren fehlgeschlagen — Text bitte von Hand markieren.', true));
+  }
+
+  /* ═══════════════════════════════════════════════════════════════════
+     12 · ABLAEUFE
+     ═══════════════════════════════════════════════════════════════════ */
+
+  /* --- Horizont --- */
+
+  function horizontPruefen() {
+    const roh = R('hjson').value.trim();
+    if (!roh) return status('hstatus', 'Bitte erst die Antwort der KI einfügen.', true);
+    try {
+      const liste = leseJson(roh, 'aufgaben')
+        .map(a => ({
+          nr: Number(a.nr), schlagwort: a.schlagwort || '', afb: a.afb || '',
+          punkte: a.punkte == null ? null : zahl(a.punkte),
+          operator: a.operator || '', horizont: a.horizont || a.text || ''
+        }))
+        .filter(a => !isNaN(a.nr))
+        .sort((a, b) => a.nr - b.nr);
+      if (!liste.length) throw new Error('Keine Aufgaben im JSON.');
+
+      const { doppelt } = pruefeVollstaendig(liste, liste.map(a => a.nr));
+      if (doppelt.length) throw new Error('Aufgabe ' + doppelt.join(', ') + ' kommt doppelt vor.');
+
+      const summe = liste.reduce((s, a) => s + (a.punkte || 0), 0);
+      const gesamt = leseGesamtpunkte();
+      horizontAufgaben = liste;
+
+      const box = R('hliste'); box.innerHTML = '';
+      liste.forEach(a => {
+        const k = el('div', 'mag-karte');
+        k.appendChild(el('div', 'mag-kartenkopf',
+          'Aufgabe ' + a.nr + (a.afb ? ' · AFB ' + a.afb : '')
+          + (a.schlagwort ? ' · ' + a.schlagwort : '')
+          + (a.punkte != null ? '  (' + komma(a.punkte) + ' P.)' : '')));
+        const ta = el('textarea', 'mag-kartentext');
+        ta.value = htmlZuText(a.horizont);
+        ta.rows = 5;
+        ta.addEventListener('input', () => { a.horizont = ta.value; });
+        k.appendChild(ta);
+        box.appendChild(k);
+      });
+
+      let meldung = liste.length + ' Aufgaben gelesen.';
+      if (gesamt && Math.abs(summe - gesamt) > 0.005) {
+        meldung += '  ⚠ Punktsumme ' + komma(summe) + ' weicht von der Fragenpunktzahl '
+                 + komma(gesamt) + ' ab — die Erweiterung rechnet sie beim Bewerten um.';
+      }
+      status('hstatus', meldung);
+      R('hknoepfe').hidden = false;
+      hinweiseAktualisieren();
+    } catch (e) {
+      status('hstatus', 'Konnte nicht gelesen werden: ' + e.message, true);
+    }
+  }
+
+  async function horizontSchreiben(trocken) {
+    if (!horizontAufgaben) return;
+    const ziel = frageBearbeitenUrl();
+    if (!ziel) return status('hstatus', 'Die Adresse der Frage lässt sich hier nicht bestimmen — '
+      + 'bitte die Frage zum Bearbeiten öffnen.', true);
+    const log = protokoll('hlog');
+    const felder = { 'graderinfo[text]': baueHorizont(horizontAufgaben) };
+    // Auf der Bearbeiten-Seite geht die Antwortvorlage im selben Absenden mit.
+    if (KONTEXT === 'bearbeiten' && P('vorlage')) {
+      felder['responsetemplate[text]'] = baueAntwortvorlage(horizontAufgaben);
+    }
+    await schreibenAusfuehren(felder, trocken, log, 'hstatus');
+  }
+
+  async function schreibenAusfuehren(felder, trocken, log, statusRolle) {
+    const namen = Object.keys(felder);
+    try {
+      status(statusRolle, trocken ? 'Trockenlauf läuft …' : 'Wird eingetragen …');
+      if (KONTEXT !== 'bearbeiten') {
+        // Nachtragen von der Bewertungsseite aus: gleiche Mechanik, andere Adresse.
+        const ziel = frageBearbeitenUrl();
+        const dok = await holeDok(ziel);
+        const form = [...dok.forms].find(f => f.querySelector('[name="graderinfo[text]"]'));
+        if (!form) throw new Error('Bearbeiten-Formular der Frage nicht erreichbar.');
+        const werte = formularFelder(form);
+        namen.forEach(n => {
+          if (!werte.has(n)) throw new Error('Feld „' + n + '" nicht im Formular');
+          log((trocken ? '✓ ' : '') + 'Feld ' + n + ' vorhanden'
+            + (htmlZuText(werte.get(n)).length ? ' (enthält schon Text!)' : ''));
+          if (!trocken) werte.set(n, felder[n]);
+        });
+        if (trocken) return status(statusRolle, 'Alles vorhanden. Jetzt eintragen.');
+        await sendeFormular(form, werte, ziel);
+        log('✓ gespeichert — bitte die Frage neu laden und nachsehen.');
+        return status(statusRolle, 'Eingetragen. Gegenprobe bitte in der Frage selbst.');
+      }
+
+      const r = await schreibeFrageFelder(felder, trocken);
+      r.bericht.forEach(b => log((trocken ? '✓ ' : '') + 'Feld ' + b.feld + ' vorhanden'
+        + (b.belegt ? ' (enthält schon Text!)' : '')));
+      if (trocken) return status(statusRolle, 'Alles vorhanden. Jetzt eintragen.');
+      let fehler = 0;
+      (r.ergebnis || []).forEach(x => {
+        log((x.ok ? '✓ ' : '✗ ') + x.feld + (x.ok ? ' eingetragen' : ' NICHT angekommen'));
+        if (!x.ok) fehler++;
+      });
+      if (fehler) return status(statusRolle, fehler + ' Feld(er) nicht angekommen — Protokoll lesen.', true);
+      status(statusRolle, 'Eingetragen und gegengeprüft. Die Seite wird neu geladen.');
+      setTimeout(() => location.reload(), 2500);
+    } catch (e) {
+      log('✗ ' + e.message);
+      status(statusRolle, 'Fehler: ' + e.message, true);
+    }
+  }
+
+  /* --- Korrektur --- */
+
+  // Geteilt wird die KLASSE, nie die Aufgabe: eine Klausur wird als Ganzes bewertet.
+  // Der Vorschlag richtet sich nach der tatsächlichen Textlänge, nicht nach einer festen Zahl.
+  function stapelVorschlag(abgaben) {
+    const schnitt = abgaben.length
+      ? abgaben.reduce((s, a) => s + woerter(a.text), 0) / abgaben.length : 0;
+    const zeichenBudget = 22000;                  // grober Richtwert je Durchgang
+    const proAbgabe = Math.max(200, schnitt * 6); // Wörter → Zeichen, plus Feedback-Rückweg
+    return Math.max(1, Math.min(30, Math.floor(zeichenBudget / proAbgabe)));
+  }
+
+  function stapelAufbauen() {
+    const abgaben = leseAbgaben();
+    const sel = R('kgroesse');
+    if (!sel.options.length) {
+      [1, 2, 3, 5, 8, 10, 15, 20, 30].forEach(n => sel.appendChild(new Option(n + ' Abgaben', n)));
+      sel.value = String(stapelVorschlag(abgaben));
+      sel.addEventListener('change', stapelAufbauen);
+    }
+    const schnitt = abgaben.length
+      ? Math.round(abgaben.reduce((s, a) => s + woerter(a.text), 0) / abgaben.length) : 0;
+    R('kgroessehinweis').textContent = abgaben.length + ' Abgaben, im Schnitt ' + schnitt
+      + ' Wörter. Vorschlag: ' + stapelVorschlag(abgaben) + ' je Durchgang.';
+
+    const horizont = leseHorizontRoh() || E.horizontLokal;
+    const groesse = parseInt(sel.value, 10) || 5;
+    const teile = Math.ceil(abgaben.length / groesse) || 1;
+    const box = R('kknoepfe'); box.innerHTML = '';
+    for (let t = 0; t < teile; t++) {
+      const von = t * groesse, bis = Math.min(von + groesse, abgaben.length);
+      const b = el('button', 'mag-btn mag-btn-primary',
+        teile === 1 ? '📋 Prompt kopieren' : '📋 Teil ' + (t + 1) + ' (Abgabe ' + (von + 1) + '–' + bis + ')');
+      b.addEventListener('click', () => {
+        if (!horizont) return status('kstatus',
+          'Kein Erwartungshorizont — bitte erst den Reiter „Erwartungshorizont" verwenden.', true);
+        kopiere(baueKorrekturPrompt(abgaben.slice(von, bis), horizont, t + 1, teile),
+          'kstatus', teile === 1 ? 'Prompt kopiert.' : 'Teil ' + (t + 1) + ' kopiert.');
+      });
+      box.appendChild(b);
+    }
+  }
+
+  function korrekturPruefen() {
+    const roh = R('kjson').value.trim();
+    if (!roh) return status('kstatus', 'Bitte erst die Antworten der KI einfügen.', true);
+    try {
+      const abgaben = leseAbgaben();
+      const horizont = leseHorizontRoh() || E.horizontLokal;
+      const bloecke = zerlegeHorizont(horizont);
+      const liste = leseJson(roh, 'bewertungen').filter(b => b && b.nr != null);
+      const { fehlend, doppelt } = pruefeVollstaendig(liste, abgaben.map(a => a.nr));
+      if (doppelt.length) throw new Error('Abgabe ' + doppelt.join(', ') + ' kommt doppelt vor.');
+
+      eintragungen = [];
+      const box = R('kliste'); box.innerHTML = '';
+      let ohneAenderung = 0;
+
+      liste.forEach(b => {
+        const abgabe = abgaben.find(a => a.nr === Number(b.nr));
+        if (!abgabe) return;
+        const rechnung = rechneAbgabe(abgabe, b, bloecke);
+        const text = baueFeedback(b, rechnung, bloecke);
+        if (Math.abs(rechnung.gesamt - abgabe.ist) < 0.005 && !abgabe.kommentarfeld) {
+          ohneAenderung++; return;
+        }
+        eintragungen.push({
+          nr: abgabe.nr, markfeld: abgabe.markfeld, kommentarfeld: abgabe.kommentarfeld,
+          punkte: rechnung.gesamt, feedbackHtml: feedbackAlsHtml(text), text: text
+        });
+        const k = el('div', 'mag-karte');
+        k.appendChild(el('div', 'mag-kartenkopf',
+          'Abgabe ' + abgabe.nr + ':  ' + komma(abgabe.ist) + ' → ' + komma(rechnung.gesamt)
+          + ' von ' + komma(rechnung.max) + ' P.'
+          + (rechnung.abzug > 0.004 ? '   (−' + komma(rechnung.abzug) + ' P. Sprache)' : '')));
+        k.appendChild(el('div', 'mag-kartenzeile', rechnung.teil
+          .map(t => 'A' + t.nr + ': ' + t.prozent + '%').join('   ')
+          + '   ·   ' + rechnung.wortzahl + ' Wörter, ' + komma(rechnung.fehlerDichte) + ' Fehler/100'
+          + (rechnung.fehlendeAufgaben.length
+             ? '   ·   ⚠ Aufgabe ' + rechnung.fehlendeAufgaben.join(', ') + ' von der KI nicht bewertet (0 %)'
+             : '')));
+        const ta = el('textarea', 'mag-kartentext');
+        ta.value = text; ta.rows = 6;
+        const eintrag = eintragungen[eintragungen.length - 1];
+        ta.addEventListener('input', () => {
+          eintrag.text = ta.value; eintrag.feedbackHtml = feedbackAlsHtml(ta.value);
+        });
+        k.appendChild(ta);
+        box.appendChild(k);
+      });
+
+      let meldung = eintragungen.length + ' Abgaben vorbereitet.';
+      if (ohneAenderung) meldung += '  ' + ohneAenderung + ' ohne Änderung übersprungen.';
+      if (fehlend.length) meldung += '  ⚠ Es fehlen die Abgaben ' + fehlend.join(', ')
+        + ' — bitte den fehlenden Teil nachreichen.';
+      status('kstatus', meldung, fehlend.length > 0);
+      R('keintragen').hidden = eintragungen.length === 0;
+      bewertungen = liste;
+    } catch (e) {
+      status('kstatus', 'Konnte nicht gelesen werden: ' + e.message, true);
+    }
+  }
+
+  async function korrekturEintragen(trocken) {
+    if (!eintragungen || !eintragungen.length) return;
+    const log = protokoll('klog');
+    try {
+      status('kstatus', trocken ? 'Trockenlauf läuft …' : 'Wird eingetragen …');
+      const r = await trageEin(eintragungen, trocken, log);
+      if (trocken) {
+        return status('kstatus', r.fehler
+          ? r.fehler + ' Abgabe(n) nicht auf der Seite — Protokoll lesen.'
+          : 'Alles vorhanden. Jetzt eintragen.', r.fehler > 0);
+      }
+      log('— ' + r.ok + ' eingetragen · ' + r.fehler + ' fehlgeschlagen —');
+      if (r.fehler) {
+        // Bei Fehlern bleibt das Panel offen: sonst verschwindet genau die Zeile,
+        // die man lesen müsste.
+        status('kstatus', r.fehler + ' fehlgeschlagen — Protokoll lesen.', true);
+      } else {
+        status('kstatus', r.ok + ' Bewertungen eingetragen und gegengeprüft.');
+        setTimeout(() => { if (!panel.matches(':hover')) location.reload(); }, 4000);
+      }
+    } catch (e) {
+      log('✗ ' + e.message);
+      status('kstatus', 'Fehler: ' + e.message, true);
+    }
+  }
+
+  /* ═══════════════════════════════════════════════════════════════════
+     13 · EREIGNISSE UND START
+     ═══════════════════════════════════════════════════════════════════ */
+
+  let promptZiel = 'horizont';
+
+  const AKTIONEN = {
+    einst:  () => { formularAusEinstellungen(); zeige('einst'); },
+    zu:     () => { panel.classList.remove('offen'); knopf.classList.remove('versteckt'); },
+
+    hprompt: () => kopiere(baueHorizontPrompt(), 'hstatus', 'Prompt kopiert.'),
+    hedit:   () => oeffnePromptEditor('horizont'),
+    hpruefen: horizontPruefen,
+    htrocken: () => horizontSchreiben(true),
+    hschreiben: () => horizontSchreiben(false),
+    hlokalsichern: () => {
+      E.horizontLokal = R('hlokal').value.trim();
+      sichereEinstellungen();
+      status('hstatus', E.horizontLokal
+        ? 'Horizont in der Erweiterung gespeichert (nicht in der Frage).'
+        : 'Gespeicherter Horizont gelöscht.');
+      stapelAufbauen();
+    },
+
+    beides:  () => horizontSchreiben(false),
+    kopierh: () => horizontAufgaben
+      ? kopiere(baueHorizont(horizontAufgaben), 'vstatus', 'Horizont-HTML kopiert.')
+      : status('vstatus', 'Erst im Reiter „Erwartungshorizont" die KI-Antwort einlesen.', true),
+    kopierv: () => horizontAufgaben
+      ? kopiere(baueAntwortvorlage(horizontAufgaben), 'vstatus', 'Antwortvorlage kopiert.')
+      : status('vstatus', 'Erst im Reiter „Erwartungshorizont" die KI-Antwort einlesen.', true),
+
+    kedit:    () => oeffnePromptEditor('korrektur'),
+    kpruefen: korrekturPruefen,
+    ktrocken: () => korrekturEintragen(true),
+    kschreiben: () => korrekturEintragen(false),
+    krohdaten: () => kopiere(JSON.stringify({
+      stand: new Date().toLocaleString('de-DE'),
+      fach: E.fach, jahrgang: E.jahrgang,
+      gesamtpunkte: leseGesamtpunkte(),
+      aufgabenstellung: leseAufgabenstellung(),
+      horizont: htmlZuText(leseHorizontRoh() || E.horizontLokal),
+      abgaben: leseAbgaben().map(a => {
+        const z = zerlegeAbgabe(a.rohHtml, a.text);
+        return { nr: a.nr, ist: a.ist, max: a.max, gegliedert: z.gegliedert, aufgaben: z.aufgaben };
+      })
+    }, null, 2), 'kstatus', 'Rohdaten kopiert.'),
+
+    esichern:  () => { einstellungenAusFormular(); zeige(letzterReiter); },
+    eabbruch:  () => zeige(letzterReiter),
+
+    psichern: () => {
+      const t = R('ptext').value.trim();
+      const original = promptZiel === 'horizont' ? horizontPromptVorlage() : korrekturPromptVorlage();
+      const wert = (t === original.trim()) ? null : t;
+      if (promptZiel === 'horizont') E.promptHorizont = wert; else E.promptKorrektur = wert;
+      sichereEinstellungen();
+      zeige(letzterReiter);
+    },
+    pzurueck: () => {
+      R('ptext').value = promptZiel === 'horizont' ? horizontPromptVorlage() : korrekturPromptVorlage();
+    },
+    pabbruch: () => zeige(letzterReiter)
+  };
+
+  function oeffnePromptEditor(ziel) {
+    promptZiel = ziel;
+    R('ptitel').textContent = ziel === 'horizont'
+      ? 'Prompt für den Erwartungshorizont' : 'Prompt für die Korrektur';
+    const eigen = ziel === 'horizont' ? E.promptHorizont : E.promptKorrektur;
+    R('ptext').value = (eigen && eigen.trim())
+      || (ziel === 'horizont' ? horizontPromptVorlage() : korrekturPromptVorlage());
+    zeige('prompt');
+  }
+
+  panel.addEventListener('click', ev => {
+    const tab = ev.target.closest('.mag-tab');
+    if (tab) return zeige(tab.dataset.tab);
+    const tu = ev.target.closest('[data-tu]');
+    if (tu && AKTIONEN[tu.dataset.tu]) { ev.preventDefault(); AKTIONEN[tu.dataset.tu](); }
+  });
+
+  panel.addEventListener('change', ev => {
+    const f = ev.target.closest('[data-opt]');
+    if (!f) return;
+    // Die Aussehen-Häkchen der Antwortvorlage wirken sofort auf die Vorschau.
+    if (['afbFarben', 'vorlagePunkte', 'vorlageAfb'].includes(f.dataset.opt)) {
+      E[f.dataset.opt] = f.checked;
+      sichereEinstellungen();
+      hinweiseAktualisieren();
+    }
+  });
+
+  knopf.addEventListener('click', () => {
+    panel.classList.add('offen');
+    knopf.classList.add('versteckt');
+  });
+
+  /* --- Start --- */
+  ladeEinstellungen().then(() => {
+    document.body.appendChild(knopf);
+    document.body.appendChild(panel);
+    formularAusEinstellungen();
+    R('hlokal').value = E.horizontLokal || '';
+
+    const z = zustaendigkeit();
+    const banner = panel.querySelector('.mag-banner');
+    if (z.wer === 'coach') {
+      banner.hidden = false;
+      banner.textContent = 'Diese Frage ist für den Moodle AI Coach gebaut. '
+        + 'Der Grader kann sie trotzdem bewerten.';
+    } else if (!z.horizont && KONTEXT === 'bewertung' && !E.horizontLokal) {
+      banner.hidden = false;
+      banner.textContent = 'Diese Frage hat noch keinen Erwartungshorizont. '
+        + 'Er lässt sich hier nachtragen.';
     }
 
-    document.getElementById('mag-btn-paste-all').addEventListener('click', () => {
-        const data = validatedData;
-        if (!data) return;
-        const allReviewed = data.every(item => item.reviewed === true);
-        if (allReviewed) {
-            pasteAll(data);
-        } else {
-            document.getElementById('mag-warning-modal').style.display = 'flex';
-            const btnConfirm = document.getElementById('mag-warn-confirm');
-            const btnReview  = document.getElementById('mag-warn-review');
-            const btnCancel  = document.getElementById('mag-warn-cancel');
-            const close = () => document.getElementById('mag-warning-modal').style.display = 'none';
-            btnConfirm.onclick = () => { close(); pasteAll(data); };
-            btnReview.onclick  = () => {
-                close();
-                reviewData  = data;
-                reviewIndex = 0;
-                reviewOverlay.style.display = 'flex';
-                updateReviewUI();
-            };
-            btnCancel.onclick = close;
-        }
-    });
+    // Fehlt der Horizont, springt die Erweiterung von selbst in den Horizont-Reiter.
+    const start = (KONTEXT === 'bewertung' && !z.horizont && !E.horizontLokal)
+      ? 'horizont' : REITER[0][0];
+    zeige(start);
 
-    document.getElementById('mag-btn-start-review').addEventListener('click', () => {
-        const data = validatedData;
-        if (!data || data.length === 0) return;
-        reviewData  = data;
-        reviewIndex = 0;
-        reviewOverlay.style.display = 'flex';
-        updateReviewUI();
-    });
-
-    // ── REVIEW ──
-    document.getElementById('rev-btn-close-review').addEventListener('click', () => {
-        reviewOverlay.style.display = 'none';
-    });
-    reviewOverlay.addEventListener('click', e => {
-        if (e.target === reviewOverlay) reviewOverlay.style.display = 'none';
-    });
-
-    function updateReviewUI() {
-        if (reviewIndex >= reviewData.length) {
-            reviewOverlay.style.display = 'none';
-            alert(`✅ Review abgeschlossen! ${reviewData.length} Schüler bewertet.`);
-            return;
-        }
-        const item = reviewData[reviewIndex];
-        document.getElementById('rev-title').innerText     = `Bewertung – Schüler ${item.id + 1}`;
-        document.getElementById('rev-counter').innerText   = `${reviewIndex + 1} / ${reviewData.length}`;
-        const answerEl = document.getElementById('rev-answer');
-        answerEl.value = getStudentAnswerFromDOM(item.id);
-        const reasoning = (item.reasoning || '').replace(/\\n/g, '\n').trim();
-        const reasoningBox = document.getElementById('rev-reasoning-box');
-        if (reasoning) {
-            document.getElementById('rev-reasoning').innerText = reasoning;
-            reasoningBox.style.display = 'block';
-        } else {
-            reasoningBox.style.display = 'none';
-        }
-        document.getElementById('rev-points').value        = formatPoints(item.points);
-        document.getElementById('rev-feedback').value      = (item.feedback || '').replace(/\\n/g, '\n');
+    if (KONTEXT === 'bewertung') {
+      const n = leseAbgaben().length;
+      status('kstatus', n ? n + ' Abgaben auf dieser Seite.' : 'Keine Abgaben gefunden.');
+    } else {
+      status('hstatus', z.horizont
+        ? 'Diese Frage hat bereits einen Erwartungshorizont — ein neuer ersetzt ihn.'
+        : 'Noch kein Erwartungshorizont in dieser Frage.');
     }
-
-    document.getElementById('rev-btn-apply').addEventListener('click', () => {
-        const pts = document.getElementById('rev-points').value;
-        const fb  = document.getElementById('rev-feedback').value;
-        if (!writeToMoodle(reviewData[reviewIndex].id, pts, fb)) {
-            alert(`⚠️ Feld für Schüler ${reviewData[reviewIndex].id} nicht gefunden!`);
-        }
-        reviewIndex++;
-        updateReviewUI();
-    });
-
-    document.getElementById('rev-btn-skip').addEventListener('click', () => {
-        reviewIndex++;
-        updateReviewUI();
-    });
+  });
 
 })();
