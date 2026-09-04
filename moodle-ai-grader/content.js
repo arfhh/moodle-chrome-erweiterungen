@@ -679,8 +679,32 @@ WAS DU TUST
    - Nur die Stufen 100 / 75 / 50 / 25 / 0 Prozent. Kein 90.
    - KEINE Sprachregeln, KEINEN Rechtschreibabzug, KEINE Punktzahlen in den Horizont —
      das steht global in der Erweiterung und würde sich sonst widersprechen.
-   - „Auch richtig" ist der wichtigste Abschnitt. Formuliere so, wie Lernende dieser
-     Jahrgangsstufe tatsächlich schreiben.
+
+   - „AUCH RICHTIG" ist der wichtigste Abschnitt und der am häufigsten misslungene.
+     Gemeint sind NICHT ausformulierte Musterantworten, sondern die rauen, verkürzten
+     Formulierungen, mit denen Lernende dieser Jahrgangsstufe dasselbe sagen — auch
+     umgangssprachlich, auch ohne Fachbegriff.
+     Schlecht: „Von links nach rechts werden die Atome kleiner, weil die Kernladung
+     zunimmt und die Elektronen stärker angezogen werden." So schreibt eine Lehrkraft.
+     Wer so antwortet, liegt ohnehin bei 100 % — der Eintrag hilft beim Bewerten nicht.
+     Gut: „nach rechts wird es kleiner" · „der Kern zieht doller" · „es kommt eine
+     Schale dazu, deshalb wird es dicker" · „mehr Protonen, gleiche Schale".
+     Nenne mindestens vier solcher Fassungen je Aufgabe und schreibe dazu, welche
+     abweichenden Wörter dasselbe meinen (etwa Ring, Bahn oder Ebene statt Schale).
+
+   - JEDE STUFE HÄNGT AN ZÄHLBAREN BEDINGUNGEN, nie an Wörtern wie „überwiegend",
+     „im Wesentlichen", „etwas unvollständig" oder „deutliche Lücken". Solche
+     Formulierungen führen dazu, dass zwei Modelle dieselbe Antwort verschieden
+     einstufen. Zähle stattdessen, was da sein muss: Trends, Aspekte, Teilaussagen.
+     Beispiel: 100 — beide Trends beschrieben UND beide erklärt · 75 — beide
+     beschrieben, einer erklärt · 50 — beide beschrieben, keiner erklärt ODER einer
+     beschrieben und erklärt.
+     Prüfe zum Schluss, dass jede denkbare Antwort genau EINER Stufe zuzuordnen ist:
+     keine Lücke, keine Überschneidung.
+
+   - „REICHT NICHT" enthält nur Antworten, die sachlich RICHTIG, aber zu wenig sind.
+     Sachlich falsche Aussagen gehören nicht dorthin, sondern zu Stufe 0 und unter
+     „Häufiger Fehler" — sonst liest ein Bewertungsmodell sie als fast richtig.
 4. Gib je Aufgabe ein Schlagwort von zwei bis vier Wörtern an, das die Aufgabe benennt.
 
 ARBEITSWEISE
