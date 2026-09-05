@@ -1,4 +1,4 @@
-// Moodle Notenstufen Autofill – popup.js · Version 2.7 · Lizenz: CC BY-SA 4.0
+// Moodle Notenstufen Autofill – popup.js · Version 2.7.0 · Lizenz: CC BY-SA 4.0
 
 // Gymnasium-Standardwerte (Vorgabe)
 const DEFAULT_NOTEN_GYMNASIUM = [

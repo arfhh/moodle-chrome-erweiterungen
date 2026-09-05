@@ -134,6 +134,13 @@
 .co-logzeile { display: block; padding: 2px 0; word-break: break-word; color: inherit; text-decoration: none; }
 a.co-logzeile:hover { text-decoration: underline; }
 .co-logfehler { color: #991b1b; }
+
+/* Protokoll des Marker-Nachtragens: waechst waehrend des Laufs, deshalb gedeckelt
+   und scrollbar, damit das Panel nicht bei jeder Frage in die Hoehe springt. */
+.co-marklog {
+  margin-top: 8px; max-height: 160px; overflow-y: auto;
+  border-left: 3px solid #ddd6fe; padding-left: 8px;
+}
 .co-fehlendkopf { font-weight: 600; margin-bottom: 5px; }
 
 .co-vorschauzeile {

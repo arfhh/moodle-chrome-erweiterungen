@@ -1,4 +1,4 @@
-/* Moodle AI Reviewer v1.5.5
+/* Moodle AI Reviewer v1.5.7
  *
  * Schritt 1 (Ernten, nur lesend): sammelt aus der Manuellen Bewertung alle
  *   Antworten ein, die Moodle als "incorrect" bewertet hat, obwohl der
@@ -14,6 +14,10 @@
 (function () {
   'use strict';
 
+  // Versionsnummer aus dem Manifest fuer die Kopfzeile des Panels — so ist nach
+  // "↺ neu laden" sofort sichtbar, welche Fassung aktiv ist, ohne sie doppelt zu pflegen.
+  const VERSION = (chrome.runtime.getManifest ? chrome.runtime.getManifest().version : '');
+
   const PARAMS = new URLSearchParams(location.search);
   if (PARAMS.get('mode') !== 'grading') return;
 
@@ -21,7 +25,9 @@
   if (!CMID) return;
 
   // Panel nur zeigen, wenn automatisch bewertete Fragen eingeblendet sind.
-  // (Der Moodle AI Grader arbeitet ohne includeauto und bleibt so unberuehrt.)
+  // Der Grader arbeitet auf der Einzelfrageseite (slot=), der Coach auf derselben
+  // Uebersicht OHNE includeauto=1 — beide bleiben so unberuehrt, und weil sich die
+  // drei gegenseitig ausschliessen, duerfen alle dieselbe Panel-Position nutzen.
   if (PARAMS.get('includeauto') !== '1') return;
 
   const BASE = location.origin + location.pathname;
@@ -1032,7 +1038,7 @@ Gib „bewertungen" und „kommentare" zusammen in EINEM JSON-Block aus.
   const panel = el('div', 'ce-panel ce-hidden');
   panel.innerHTML = `
     <div class="ce-head">
-      <span class="ce-title">🔎 AI Reviewer</span>
+      <span class="ce-title">🔎 AI Reviewer ${VERSION}</span>
       <button class="ce-close" title="Schließen">✕</button>
     </div>
     <div class="ce-tabs">

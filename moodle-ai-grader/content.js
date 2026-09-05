@@ -18,6 +18,10 @@
 (function () {
   'use strict';
 
+  // Versionsnummer aus dem Manifest fuer die Kopfzeile des Panels — so ist nach
+  // "↺ neu laden" sofort sichtbar, welche Fassung aktiv ist, ohne sie doppelt zu pflegen.
+  const VERSION = (chrome.runtime.getManifest ? chrome.runtime.getManifest().version : '');
+
   /* ═══════════════════════════════════════════════════════════════════
      1 · KONTEXT
      ═══════════════════════════════════════════════════════════════════ */
@@ -1028,7 +1032,7 @@ Liefere für JEDE Abgabe des Blocks einen Eintrag, auch für leere Abgaben
   panel.innerHTML = `
     <div class="mag-kopf">
       <img class="mag-kopfbild" alt="">
-      <span class="mag-titel">Moodle AI Grader</span>
+      <span class="mag-titel">Moodle AI Grader ${VERSION}</span>
       <button class="mag-ikon" data-tu="einst" title="Einstellungen">⚙</button>
       <button class="mag-ikon" data-tu="zu" title="Schließen">✖</button>
     </div>

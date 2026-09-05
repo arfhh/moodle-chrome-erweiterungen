@@ -1,6 +1,6 @@
 # Moodle AI Grader
 
-**Version 3.0** · Chrome-Erweiterung (Manifest V3)
+**Version 3.0.1** · Chrome-Erweiterung (Manifest V3)
 Entwickelt von **T. Henken & A. Spielhoff** · Lizenz **CC BY-SA 4.0**
 
 Bewertet Klausuren mit mehreren Aufgaben in **einer** Moodle-Freitextfrage: legt den

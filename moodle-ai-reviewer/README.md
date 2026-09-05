@@ -2,7 +2,7 @@
 
 **Findet Schülerantworten, die inhaltlich richtig sind, aber von Moodle mit 0 Punkten bewertet wurden.**
 
-Version 1.5.5 · Schwester-Erweiterung zum *Moodle AI Grader* · Lizenz: CC BY-SA 4.0
+Version 1.5.7 · Schwester-Erweiterung zum *Moodle AI Grader* · Lizenz: CC BY-SA 4.0
 
 > Der **Grader** bewertet Freitext. Der **Reviewer** sieht nach, was der Automat bei
 > frei eingetippten Antworten übersehen hat — in Cloze-Lücken wie in Kurzantwort-Fragen.
@@ -370,11 +370,23 @@ mitgeschickt — genauso, wie es beim manuellen Speichern der Fall ist.
 
 ---
 
-*Moodle AI Reviewer – Version 1.5.5 · Entwickelt von A. Spielhoff · CC BY-SA 4.0*
+*Moodle AI Reviewer – Version 1.5.7 · Entwickelt von A. Spielhoff · CC BY-SA 4.0*
 
 ---
 
 ## Änderungen
+
+**1.5.7**
+
+- Die Kopfzeile des Panels zeigt die Versionsnummer, direkt aus dem Manifest gelesen.
+  Nach „↺ neu laden" ist damit sofort sichtbar, welche Fassung aktiv ist.
+
+**1.5.6**
+
+- Das Panel sitzt jetzt oben rechts (vorher 150 px tiefer), an derselben Stelle wie
+  Grader und Coach. Möglich, weil sich die drei gegenseitig ausschließen: der Grader
+  arbeitet auf der Einzelfrageseite, der Coach auf der Übersicht ohne `includeauto=1`,
+  der Reviewer auf der Übersicht mit `includeauto=1`. Es erscheint nie mehr als eines.
 
 **1.5.5**
 

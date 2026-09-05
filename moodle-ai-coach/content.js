@@ -1,12 +1,13 @@
-/* Moodle AI Coach — Bewertung kurzer Freitextantworten.
+/* Moodle AI Coach v1.2.0 — Bewertung kurzer Freitextantworten.
  *
- * Arbeitsteilung der drei Erweiterungen (Stand 28.08.2026):
- *   Grader   blau,   top  80px, Einzelfrageseite   — EINE Freitextaufgabe mit Teilaufgaben
- *   Reviewer petrol, top 150px, Übersicht + includeauto=1 — Cloze-Nachbewertung
- *   Coach    violett,top 220px, Übersicht ohne includeauto — kurze Freitextantworten
+ * Arbeitsteilung der drei Erweiterungen (Stand 05.09.2026):
+ *   Grader   blau,    top 80px, Einzelfrageseite (slot=)        — EINE Freitextaufgabe mit Teilaufgaben
+ *   Coach    violett, top 80px, Übersicht OHNE includeauto=1     — unbewertete kurze Freitextantworten
+ *   Reviewer petrol,  top 80px, Übersicht MIT  includeauto=1     — automatisch bewertete Cloze-/Kurzantworten
  *
- * Der Coach erscheint nur auf der ÜBERSICHT (mode=grading ohne slot=), weil dort
- * weder Grader noch Reviewer ein Panel einblenden. Belegt in coach-dom-fakten.
+ * Die drei schliessen sich gegenseitig aus: Grader nur mit slot=, Coach und
+ * Reviewer teilen die Übersicht ueber den Schalter includeauto. Deshalb duerfen
+ * alle drei dieselbe Panel-Position benutzen — es erscheint nie mehr als eines.
  *
  * Grundprinzip „Horizont zuerst": Der Erwartungshorizont steht im Moodle-Feld
  * graderinfo an der Frage selbst. Ist er da, wird sofort der Bewertungs-Prompt
@@ -17,9 +18,19 @@
 (function () {
   'use strict';
 
+  // Versionsnummer aus dem Manifest — sie steht in der Kopfzeile des Panels, damit
+  // nach "↺ neu laden" sofort sichtbar ist, welche Fassung wirklich aktiv ist.
+  // Aus dem Manifest gelesen, nie von Hand gepflegt: so kann sie nicht auseinanderlaufen.
+  const VERSION = (chrome.runtime.getManifest ? chrome.runtime.getManifest().version : '');
+
   const P = new URLSearchParams(location.search);
   if (P.get('mode') !== 'grading') return;
   if (P.get('slot')) return;                 // Einzelfrageseite gehört dem Grader
+  // Sind die automatisch bewerteten Fragen eingeblendet, gehoert die Seite dem
+  // Moodle AI Reviewer — dort geht es um Cloze- und Kurzantwort-Luecken, nicht um
+  // unbewertete Freitextantworten. Spiegelbild zur Pruefung im Reviewer, damit sich
+  // die beiden Panels nie gleichzeitig zeigen.
+  if (P.get('includeauto') === '1') return;
   const CMID = P.get('id');
   if (!CMID) return;
   const BASE = location.origin + location.pathname;
@@ -511,12 +522,26 @@
     });
     if (!antwort.ok) throw new Error('HTTP ' + antwort.status + ' beim Speichern');
 
-    const kontrolle = await fetchDoc(url);
+    // Moodle legt beim Speichern eine NEUE Fragenversion mit NEUER id an. Die alte id
+    // liefert weiterhin den alten Stand — eine Gegenprobe dort meldet fälschlich
+    // "Text nicht angekommen", obwohl gespeichert wurde (belegt 05.09.2026 an acht
+    // Fragen: v2 war da und trug den Marker, die Gegenprobe las v1). Die neue id steht
+    // im Parameter lastchanged der Adresse, auf die Moodle nach dem Speichern leitet.
+    let neueId = null;
+    try { neueId = new URL(antwort.url).searchParams.get('lastchanged'); } catch (e) { /* egal */ }
+    const pruefUrl = neueId ? fragenUrl(neueId) : url;
+
+    const kontrolle = await fetchDoc(pruefUrl);
     const feld = kontrolle.querySelector(`[name="${CSS.escape(schluessel)}"]`);
     const drin = feld ? String(feld.value || '').replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim() : '';
     const soll = String(pruefText).replace(/\s+/g, ' ').trim().slice(0, 30);
-    if (!drin || !drin.includes(soll.slice(0, 20))) throw new Error('Text nicht angekommen');
-    return { ok: true, feld: schluessel };
+    if (!drin || !drin.includes(soll.slice(0, 20))) {
+      throw new Error(neueId
+        ? 'Text nicht angekommen (geprüft an der neuen Fragenversion)'
+        : 'Nicht gegengeprüft: Moodle hat keine neue Fragen-Nummer zurückgemeldet. '
+          + 'Sieh in der Frage selbst nach — gespeichert sein kann es trotzdem.');
+    }
+    return { ok: true, feld: schluessel, neueId };
   }
 
   /* ================= Prompts ================= */
@@ -677,6 +702,32 @@ Schreibe darunter: „Kopiere diesen Block in die Erweiterung, Reiter „2 · Ei
 und klicke dort auf „🔍 Prüfen"."
 
 ═══════════════════════════════════════════════════════
+SCHRITT 3 – HORIZONT NACHZIEHEN (nur wenn korrigiert wurde)
+═══════════════════════════════════════════════════════
+
+Hat die Lehrkraft in Schritt 1 Prozentwerte geändert, ist das mehr als eine
+Einzelfallentscheidung: Der Horizont bildet ihren Maßstab an dieser Stelle nicht ab
+und würde beim nächsten Durchgang denselben Fehler wieder erzeugen.
+
+Deshalb NACH dem JSON – aber nur, wenn tatsächlich korrigiert wurde:
+
+1. Nenne je betroffener Frage in einem Satz, welche Regel sich aus der Korrektur
+   ergibt. Nicht „Nr. 7 wurde auf 100 gesetzt", sondern die dahinterliegende
+   Entscheidung: „Beim Löschsand reicht ‚löscht Brände' für 100 % – der Metallbrand
+   muss nicht genannt werden."
+2. Sag dazu, was sich im Horizont ändern müsste: meist wandert ein Teilaspekt von
+   „Muss enthalten" nach „Auch richtig", und die betroffene Prozentstufe entfällt
+   oder wird neu beschrieben.
+3. Biete an, die Horizonte dieser Fragen neu zu schreiben, mit dem Weg dorthin:
+   „Reiter 3 · Horizont, Häkchen ‚Auch Fragen einbeziehen, die schon einen Horizont
+   haben' setzen, Prompt kopieren – ich baue die Korrekturen dann direkt ein."
+4. Merke dir die Korrekturen für diesen Fall, damit sie in den neuen Horizont
+   einfließen, wenn der Horizont-Prompt gleich nachkommt.
+
+Wurde nichts geändert, lässt du diesen Schritt ersatzlos weg – kein „hier gab es
+nichts zu korrigieren".
+
+═══════════════════════════════════════════════════════
 DATEN AUS MOODLE
 ═══════════════════════════════════════════════════════
 
@@ -776,8 +827,14 @@ AUFGABEN OHNE ERWARTUNGSHORIZONT
   function baueHorizontPrompt(fragenListe) {
     const eigen = (optionen.horizontPromptOverride || '').trim();
     const vorlage = eigen || horizontPromptVorlage();
+    // Bei Fragen, die schon einen Horizont haben, wandert er als horizont_bisher mit:
+    // die KI soll wissen, wovon sie abweicht, statt blind neben dem Vorhandenen zu schreiben.
     const block = '```json\n' + JSON.stringify(
-      fragenListe.map((f) => ({ qid: f.qid, frage: f.name, aufgabe: f.aufgabe, max: f.max })),
+      fragenListe.map((f) => {
+        const e = { qid: f.qid, frage: f.name, aufgabe: f.aufgabe, max: f.max };
+        if (f.horizont) e.horizont_bisher = horizontOhneMarker(f.horizont);
+        return e;
+      }),
       null, 1) + '\n```';
     const platz = '[MOODLE_AI_COACH_AUFGABEN]';
     return vorlage.includes(platz) ? vorlage.replace(platz, block) : vorlage + '\n\n' + block;
@@ -806,7 +863,7 @@ AUFGABEN OHNE ERWARTUNGSHORIZONT
   const panel = el('div', 'co-panel co-hidden');
   panel.innerHTML = `
     <div class="co-head">
-      <span class="co-title">Co &nbsp;AI Coach</span>
+      <span class="co-title">AI Coach ${VERSION}</span>
       <button class="co-close" title="Schließen">✕</button>
     </div>
     <div class="co-tabs">
@@ -867,8 +924,14 @@ AUFGABEN OHNE ERWARTUNGSHORIZONT
     <div class="co-body co-hidden" data-panel="horizont">
       <p class="co-hinweis">Der Erwartungshorizont gehört in die Frage, nicht in die
       Erweiterung — einmal erstellt, gilt er dauerhaft und wandert beim Export mit.
-      Dieser Reiter wird nur gebraucht, wenn er irgendwo fehlt.</p>
+      Hier wird er angelegt, wo er fehlt — oder für vorhandene neu geschrieben.</p>
       <div class="co-ohneliste"></div>
+      <label class="co-check"><input type="checkbox" class="co-halle">
+        Auch Fragen einbeziehen, die schon einen Horizont haben — <strong>der wird dabei
+        überschrieben</strong></label>
+      <p class="co-hinweis">Beim Neuschreiben bekommt die KI den bisherigen Horizont mit,
+      damit sie weiß, wovon sie abweicht. Ersetzt wird er erst, wenn du die Antwort in
+      Schritt 2 einfügst und einträgst.</p>
       <p class="co-schritt">Schritt 1 — Prompt holen</p>
       <button class="co-hcopy">📋 Prompt für Erwartungshorizont kopieren</button>
       <details class="co-details">
@@ -946,12 +1009,14 @@ AUFGABEN OHNE ERWARTUNGSHORIZONT
 
   knopf.addEventListener('click', () => panel.classList.toggle('co-hidden'));
   $('.co-close').addEventListener('click', () => panel.classList.add('co-hidden'));
+  function reiterZeigen(name) {
+    panel.querySelectorAll('.co-tab').forEach((x) =>
+      x.classList.toggle('co-aktiv', x.dataset.tab === name));
+    panel.querySelectorAll('[data-panel]').forEach((p) =>
+      p.classList.toggle('co-hidden', p.dataset.panel !== name));
+  }
   panel.querySelectorAll('.co-tab').forEach((t) => {
-    t.addEventListener('click', () => {
-      panel.querySelectorAll('.co-tab').forEach((x) => x.classList.toggle('co-aktiv', x === t));
-      panel.querySelectorAll('[data-panel]').forEach((p) =>
-        p.classList.toggle('co-hidden', p.dataset.panel !== t.dataset.tab));
-    });
+    t.addEventListener('click', () => reiterZeigen(t.dataset.tab));
   });
 
   function abzugWert() {
@@ -1009,6 +1074,11 @@ AUFGABEN OHNE ERWARTUNGSHORIZONT
     });
     $('.co-kitext').value = optionen.kiHinweisText;
     abzugInfo(); kiVorschau(); optInfo('Gespeichert ✓');
+    // Der Einstellungs-Reiter schliesst sich nach dem Speichern von selbst. Bleibt er
+    // offen, sieht das Panel unveraendert aus und man klickt aus Unsicherheit ein
+    // zweites Mal. Die kurze Pause laesst die Quittung noch lesbar werden.
+    kurzQuittung($('.co-optsave'), '✓ Gespeichert', 'Speichern');
+    setTimeout(() => reiterZeigen('lesen'), 900);
   });
 
   // Die Prompts werden dort bearbeitet, wo sie benutzt werden — der Bewertungs-Prompt
@@ -1112,29 +1182,63 @@ AUFGABEN OHNE ERWARTUNGSHORIZONT
           ohneMarker.forEach((f) => zustBox.appendChild(el('div', 'co-logzeile', f.name)));
           const urText = `${MARKER_ZEILE} in ${ohneMarker.length} Frage(n) nachtragen`;
           const nach = el('button', 'co-marker co-zweit', urText);
-          let bestaetigt = false;
+          let bestaetigt = false, rueckfallUhr = null;
           nach.addEventListener('click', async () => {
             // Das schreibt in die Fragensammlung — deshalb zwei Klicks.
             if (!bestaetigt) {
               bestaetigt = true;
               nach.textContent = 'Wirklich? Ändert die Fragen — noch einmal klicken';
-              setTimeout(() => { if (bestaetigt) { bestaetigt = false; nach.textContent = urText; } }, 8000);
+              rueckfallUhr = setTimeout(() => {
+                if (bestaetigt) { bestaetigt = false; nach.textContent = urText; }
+              }, 8000);
               return;
             }
-            nach.disabled = true; nach.textContent = 'trage nach …';
+            // Die Rückfall-Uhr aus dem ersten Klick MUSS hier sterben: sonst setzt sie
+            // mitten im Lauf den Knopftext auf "nachtragen" zurück, und es sieht aus,
+            // als sei nichts passiert (genau das ist am 05.09.2026 aufgefallen).
+            if (rueckfallUhr) { clearTimeout(rueckfallUhr); rueckfallUhr = null; }
+            nach.disabled = true;
+
+            // Jede Frage ist ein eigener Seitenaufruf und dauert eine knappe Sekunde.
+            // Ohne mitlaufende Anzeige wirkt die Erweiterung tot: deshalb Zähler im Knopf
+            // und je Frage sofort eine Zeile — nicht erst am Ende gesammelt.
+            const lauf = el('div', 'co-marklog');
+            zustBox.appendChild(lauf);
             let ok = 0; const schlecht = [];
-            for (const f of ohneMarker) {
-              try { await markerNachtragen(f.qid); ok++; }
-              catch (e) { schlecht.push(`${f.name}: ${e.message}`); }
+            for (let i = 0; i < ohneMarker.length; i++) {
+              const f = ohneMarker[i];
+              nach.textContent = `Trage nach … ${i + 1} von ${ohneMarker.length}: ${f.name}`;
+              const zeile = el('div', 'co-logzeile', `… ${f.name}`);
+              lauf.appendChild(zeile);
+              lauf.scrollTop = lauf.scrollHeight;
+              try {
+                await markerNachtragen(f.qid); ok++;
+                zeile.textContent = `✓ ${f.name}`;
+              } catch (e) {
+                schlecht.push(`${f.name}: ${e.message}`);
+                zeile.textContent = `✗ ${f.name}: ${e.message}`;
+                zeile.classList.add('co-logfehler');
+              }
             }
             nach.textContent = `${ok} nachgetragen`
               + (schlecht.length ? `, ${schlecht.length} fehlgeschlagen` : '');
-            schlecht.forEach((s) => zustBox.appendChild(el('div', 'co-logzeile', '✗ ' + s)));
             if (ok) zustBox.appendChild(el('div', 'co-logzeile',
               'Bitte „Freitextaufgaben durchsuchen" noch einmal laufen lassen — dann liest '
               + 'die Erweiterung den neuen Stand.'));
           });
           zustBox.appendChild(nach);
+
+          // Zweiter Weg: Wer nicht weiss, was in diesen Fragen ueberhaupt steht, will den
+          // Horizont oft lieber neu schreiben als einen fremden nur mit Marker versehen.
+          const neuSchreiben = el('button', 'co-hneu co-zweit', 'Horizont neu schreiben');
+          neuSchreiben.title = 'Springt zu Reiter 3 und nimmt diese Fragen in den Prompt auf';
+          neuSchreiben.addEventListener('click', () => {
+            $('.co-halle').checked = true;
+            hcopyBeschriften();
+            reiterZeigen('horizont');
+            $('.co-hcopy').scrollIntoView({ block: 'nearest' });
+          });
+          zustBox.appendChild(neuSchreiben);
         }
       } else zustBox.classList.add('co-hidden');
 
@@ -1163,8 +1267,15 @@ AUFGABEN OHNE ERWARTUNGSHORIZONT
         oh.appendChild(el('div', 'co-fehlendkopf', 'Ohne Erwartungshorizont:'));
         ohneH.forEach((f) => oh.appendChild(el('div', 'co-logzeile', `${f.name} — ${f.aufgabe.slice(0, 90)}`)));
       } else {
-        oh.appendChild(el('div', 'co-logzeile', 'Alle Fragen haben einen Erwartungshorizont — hier ist nichts zu tun.'));
+        oh.appendChild(el('div', 'co-fehlendkopf',
+          'Alle Fragen haben einen Horizont. Willst du einen neuen für die Aufgaben schreiben?'));
+        oh.appendChild(el('div', 'co-logzeile',
+          'Setz dazu unten das Häkchen — der vorhandene Horizont wird beim Eintragen überschrieben.'));
       }
+      // Fehlt nirgends ein Horizont, ist Neuschreiben der einzig sinnvolle Weg —
+      // dann steht das Häkchen von vornherein.
+      if (!ohneH.length && mitH.length) $('.co-halle').checked = true;
+      hcopyBeschriften();
 
       ernteSichern();
       const gr = bauePrompt(ausgabe).length;
@@ -1359,16 +1470,34 @@ AUFGABEN OHNE ERWARTUNGSHORIZONT
 
   /* ---- Reiter 3: Erwartungshorizont ---- */
 
+  // Welche Fragen kommen in den Horizont-Prompt: die ohne Horizont immer, die mit
+  // Horizont nur auf ausdruecklichen Wunsch — dort wird ein vorhandener Text ersetzt.
+  function horizontAuswahl() {
+    if (!ausgabe) return [];
+    const alle = Object.values(ausgabe.fragen);
+    return $('.co-halle').checked ? alle : alle.filter((f) => !f.horizont);
+  }
+  function hcopyBeschriften() {
+    const n = horizontAuswahl().length;
+    const neu = $('.co-halle').checked;
+    $('.co-hcopy').textContent = neu
+      ? `📋 Prompt zum Neuschreiben kopieren (${n} Frage${n === 1 ? '' : 'n'})`
+      : '📋 Prompt für Erwartungshorizont kopieren';
+  }
+  $('.co-halle').addEventListener('change', hcopyBeschriften);
+
   $('.co-hcopy').addEventListener('click', async () => {
     if (!ausgabe) { $('.co-hinfo').className = 'co-hinfo co-error';
       $('.co-hinfo').classList.remove('co-hidden');
       $('.co-hinfo').textContent = KEINE_ERNTE; return; }
-    const ohne = Object.values(ausgabe.fragen).filter((f) => !f.horizont);
-    if (!ohne.length) { $('.co-hinfo').className = 'co-hinfo';
+    const auswahl = horizontAuswahl();
+    if (!auswahl.length) { $('.co-hinfo').className = 'co-hinfo';
       $('.co-hinfo').classList.remove('co-hidden');
-      $('.co-hinfo').textContent = 'Es fehlt kein Horizont — hier ist nichts zu tun.'; return; }
-    await inZwischenablage(baueHorizontPrompt(ohne));
-    quittung('.co-hcopy', '📋 Prompt für Erwartungshorizont kopieren');
+      $('.co-hinfo').textContent = 'Es fehlt kein Horizont. Setz das Häkchen darüber, '
+        + 'wenn du die vorhandenen neu schreiben lassen willst.'; return; }
+    await inZwischenablage(baueHorizontPrompt(auswahl));
+    const urText = $('.co-hcopy').textContent;
+    quittung('.co-hcopy', urText);
   });
 
   $('.co-hpruef').addEventListener('click', () => {

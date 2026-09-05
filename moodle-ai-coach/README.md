@@ -3,7 +3,7 @@
 Bewertet **kurze Freitextantworten** (ein bis drei Sätze) in Moodles Manueller
 Bewertung — Punkte **und** Sprachfeedback.
 
-Version 0.97.1 · vierte Erweiterung neben *Moodle AI Grader*, *Moodle AI Reviewer* und
+Version 1.2.0 · vierte Erweiterung neben *Moodle AI Grader*, *Moodle AI Reviewer* und
 *Notenstufen Autofill* · Lizenz: CC BY-SA 4.0 · A. Spielhoff
 
 ---
@@ -195,7 +195,7 @@ Am 28.08.2026 lesend am Hamburg-LMS verifiziert:
 Ein Trockenlauf mit genau dieser Logik ergab an einer echten Frage: 36 Felder,
 `sesskey` dabei, `cancel` nicht dabei, keine `undefined`-Werte, POST ≈ 3,9 KB.
 
-## Stand 0.97.1
+## Stand 1.2.0
 
 Der Bewertungsweg ist **einmal vollständig mit echten Daten gelaufen** (28.08.2026,
 Test „🕐 4.1 Kurztest Sicherheit", 78 Antworten auf 11 Freitextfragen): Auslesen,
@@ -205,6 +205,58 @@ Bewertungen** — der Beleg dafür, dass der Erwartungshorizont in der Frage fun
 
 **Fehlerfreie Antworten bekommen keinen Kommentar** (Entscheidung 28.08.2026). Der
 Eintrag geht trotzdem ins JSON, damit die Punkte gesetzt werden — nur ohne `text`.
+
+**1.2.0** — Der Bewertungs-Prompt bekommt einen **Schritt 3: „Horizont nachziehen"**.
+  Hat die Lehrkraft in der Prüftabelle Prozentwerte korrigiert, benennt die KI nach dem
+  JSON die Regel hinter jeder Korrektur, sagt, was sich im Horizont ändern müsste
+  (meist wandert ein Teilaspekt von „Muss enthalten" nach „Auch richtig"), und bietet
+  an, die betroffenen Horizonte neu zu schreiben — mit dem Weg dorthin über Reiter 3.
+  Wurde nichts geändert, entfällt der Schritt ersatzlos. Grund: Eine Korrektur ist
+  keine Einzelfallentscheidung, sondern ein Hinweis, dass der Horizont den Maßstab der
+  Lehrkraft an dieser Stelle nicht abbildet — sonst entsteht derselbe Fehler beim
+  nächsten Durchgang wieder.
+
+**1.1.1** — Das Nachtragen der Marker zeigt jetzt, dass es läuft: Der Knopf zählt mit
+  („Trage nach … 3 von 8: 1.1.2-Löschsand"), und jede Frage bekommt sofort ihre Zeile mit
+  ✓ oder ✗, statt erst am Ende. Ursache des alten Eindrucks „es passiert nichts": Die
+  8-Sekunden-Uhr aus der Sicherheitsabfrage lief weiter und setzte den Knopftext mitten
+  im Lauf auf „nachtragen" zurück. Sie wird beim zweiten Klick jetzt gestoppt.
+
+**1.1.0** — Zwei Dinge am Erwartungshorizont:
+
+  *Fehlalarm beseitigt.* Beim Nachtragen des Markers meldete die Erweiterung „Text nicht
+  angekommen", obwohl gespeichert war. Moodle legt beim Speichern eine **neue
+  Fragenversion mit neuer Nummer** an; die Gegenprobe las die alte und sah dort
+  natürlich nichts. Sie prüft jetzt an der neuen Version, deren Nummer Moodle im
+  Parameter `lastchanged` zurückmeldet. Bleibt der aus, meldet die Erweiterung
+  ehrlich „nicht gegengeprüft" statt fälschlich einen Fehlschlag.
+
+  *Horizont neu schreiben.* Reiter 3 war bisher nur für fehlende Horizonte da. Jetzt gibt
+  es dort ein Häkchen „Auch Fragen einbeziehen, die schon einen Horizont haben" — damit
+  lässt sich für alle Aufgaben ein neuer schreiben, etwa wenn der vorhandene aus einer
+  anderen Zeit stammt. Der bisherige Horizont geht als `horizont_bisher` in den Prompt,
+  damit die KI weiß, wovon sie abweicht. Fehlt nirgends ein Horizont, steht das Häkchen
+  von vornherein und der Reiter fragt „Alle Fragen haben einen Horizont. Willst du einen
+  neuen für die Aufgaben schreiben?" statt „hier ist nichts zu tun". Aus dem
+  Marker-Hinweis in Reiter 1 führt ein zweiter Knopf direkt dorthin.
+
+**1.0.0** — Erste runde Fassung, zugleich die Umstellung auf dreistellige
+  Versionsnummern (x.y.z) für alle fünf Erweiterungen. Die Kopfzeile des Panels zeigt
+  jetzt die Versionsnummer, direkt aus dem Manifest gelesen — nach „↺ neu laden" ist
+  damit ohne Umweg über `chrome://extensions/` sichtbar, welche Fassung aktiv ist.
+
+**0.97.3** — Die Titelzeile heißt jetzt schlicht „AI Coach"; das vorangestellte „Co"
+  war der Rückfall-Buchstabe des Knopfsymbols und hatte im Titel nichts zu suchen.
+  Außerdem schließt sich der Einstellungs-Reiter nach „Speichern" von selbst und der
+  Knopf quittiert kurz mit „✓ Gespeichert" — vorher sah das Panel unverändert aus,
+  und man klickte aus Unsicherheit ein zweites Mal.
+
+**0.97.2** — Der Coach hält sich von der Seite mit eingeblendeten automatisch
+  bewerteten Fragen (`includeauto=1`) fern: dort ist der *Moodle AI Reviewer*
+  zuständig, und beide Panels erschienen bisher nebeneinander. Der Coach bleibt auf
+  der Übersicht ohne diesen Schalter — genau dort stehen die unbewerteten
+  Freitextantworten. Da sich Grader, Coach und Reviewer damit gegenseitig
+  ausschließen, benutzen alle drei dieselbe Panel-Position (oben rechts).
 
 **0.97.1** — Behoben: Chrome verweigerte das Laden mit „Invalid value for
   `web_accessible_resources[0]`. Invalid match pattern." In diesem Manifest-Abschnitt

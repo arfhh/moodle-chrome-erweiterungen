@@ -1,6 +1,6 @@
 // ============================================================
 //  Moodle Notenstufen Autofill – content.js
-//  Version 2.7 · Lizenz: CC BY-SA 4.0
+//  Version 2.7.0 · Lizenz: CC BY-SA 4.0
 // ============================================================
 //  Fuellt in JEDEM Moodle unter Bewertungen -> Notenstufen die
 //  Formularzeilen (Notenbuchstabe + Prozentgrenze) automatisch aus.
