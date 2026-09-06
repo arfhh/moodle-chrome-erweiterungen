@@ -1,4 +1,4 @@
-/* Moodle AI Coach v1.4.0 — Bewertung kurzer Freitextantworten.
+/* Moodle AI Coach v1.5.0 — Bewertung kurzer Freitextantworten.
  *
  * Arbeitsteilung der drei Erweiterungen (Stand 05.09.2026):
  *   Grader   blau,    top 80px, Einzelfrageseite (slot=)        — EINE Freitextaufgabe mit Teilaufgaben
@@ -837,9 +837,20 @@ ${DATEN_PLATZHALTER}`;
 MOODLE AI COACH – ERWARTUNGSHORIZONT ERSTELLEN
 ═══════════════════════════════════════════════════════
 
-Zu den unten stehenden Aufgaben fehlt der Erwartungshorizont. Erstelle ihn – einen
-je Aufgabe, in genau dem Format unten. Er wird anschließend in das Moodle-Feld
+Für die unten stehenden Aufgaben brauchst du einen Erwartungshorizont – einen je
+Aufgabe, in genau dem Format unten. Er wird anschließend in das Moodle-Feld
 „Bewerterinformation" der Frage geschrieben und dort dauerhaft benutzt.
+
+Steht bei einer Aufgabe „horizont_bisher", gibt es dort schon einen. Er ist der
+**Ausgangspunkt, keine Vorlage zum Abschreiben**: Er wird ersetzt, weil an ihm etwas
+nicht stimmt. Übernimm, was gut ist, und weiche dort ab, wo die Änderungswünsche der
+Lehrkraft es verlangen – auch dann, wenn der bisherige Horizont das Gegenteil sagt.
+Steht kein „horizont_bisher" dabei, schreibst du neu.
+
+Die Kernaussage bekommen die Schülerinnen und Schüler zu sehen: Die Erweiterung setzt
+sie bei unvollständigen Antworten als „So hättest du es schreiben können" unter die
+Rückmeldung. Schreib sie deshalb als vollständige Musterantwort in einfacher Sprache –
+Name und Funktion, ein bis zwei kurze Sätze.
 
 WICHTIG – was NICHT hineingehört:
 Keine Sprachregeln, kein Rechtschreibabzug, kein Feedback-Stil, keine Rolle, keine
@@ -930,8 +941,21 @@ AUFGABEN OHNE ERWARTUNGSHORIZONT
         return e;
       }),
       null, 1) + '\n```';
+    // Aenderungswuensche der Lehrkraft. Ohne sie steht im Prompt nur der bisherige
+    // Horizont — und der sagt ja gerade das, was geaendert werden soll. Ein fremdes
+    // Modell hat dann keine Chance, davon abzuweichen: es schreibt den alten Stand fort.
+    const wunsch = String((typeof aenderungsWunsch === 'function' ? aenderungsWunsch() : '') || '').trim();
+    const wunschBlock = wunsch
+      ? '═══════════════════════════════════════════════════════\n'
+        + 'ÄNDERUNGSWÜNSCHE DER LEHRKRAFT\n'
+        + '═══════════════════════════════════════════════════════\n\n'
+        + 'Diese Vorgaben haben Vorrang vor allem, was in „horizont_bisher" steht.\n'
+        + 'Wo sie einem bisherigen Horizont widersprechen, gilt der Wunsch.\n\n'
+        + wunsch + '\n\n'
+      : '';
     const platz = '[MOODLE_AI_COACH_AUFGABEN]';
-    return vorlage.includes(platz) ? vorlage.replace(platz, block) : vorlage + '\n\n' + block;
+    const alles = wunschBlock + block;
+    return vorlage.includes(platz) ? vorlage.replace(platz, alles) : vorlage + '\n\n' + alles;
   }
 
   /* ================= Oberfläche ================= */
@@ -1023,6 +1047,12 @@ AUFGABEN OHNE ERWARTUNGSHORIZONT
       <label class="co-check"><input type="checkbox" class="co-halle">
         Auch Fragen einbeziehen, die schon einen Horizont haben — <strong>der wird dabei
         überschrieben</strong></label>
+      <label class="co-feldkopf">Was soll anders werden? (geht mit in den Prompt)</label>
+      <textarea class="co-hwunsch" rows="3"
+        placeholder="z. B.: Beim Löschsand müssen Metallbrände NICHT genannt werden — Name plus „löscht Brände“ reicht für 100 %."></textarea>
+      <p class="co-hinweis">Ohne diese Zeilen sieht das Sprachmodell nur den bisherigen
+      Horizont — und der sagt ja gerade das, was du ändern willst. Es schreibt ihn dann
+      fort. Was hier steht, hat im Prompt Vorrang vor dem bisherigen Horizont.</p>
       <p class="co-hinweis">Beim Neuschreiben bekommt die KI den bisherigen Horizont mit,
       damit sie weiß, wovon sie abweicht. Ersetzt wird er erst, wenn du die Antwort in
       Schritt 2 einfügst und einträgst.</p>
@@ -1580,6 +1610,23 @@ AUFGABEN OHNE ERWARTUNGSHORIZONT
     const alle = Object.values(ausgabe.fragen);
     return $('.co-halle').checked ? alle : alle.filter((f) => !f.horizont);
   }
+  // Der Wunschtext ueberlebt das Neuladen der Seite: er wird oft in zwei Anlaeufen
+  // formuliert, und ein verlorener Text aergert mehr als ein paar Bytes im Speicher.
+  const WUNSCH_KEY = 'coachWunsch_' + CMID;
+  function aenderungsWunsch() {
+    const f = panel.querySelector('.co-hwunsch');
+    return f ? f.value.trim() : '';
+  }
+  try {
+    chrome.storage.local.get([WUNSCH_KEY], (r) => {
+      const t = r && r[WUNSCH_KEY];
+      if (t && !aenderungsWunsch()) panel.querySelector('.co-hwunsch').value = t;
+    });
+  } catch (e) { /* egal */ }
+  panel.querySelector('.co-hwunsch').addEventListener('input', () => {
+    try { chrome.storage.local.set({ [WUNSCH_KEY]: aenderungsWunsch() }); } catch (e) { /* egal */ }
+  });
+
   function hcopyBeschriften() {
     const n = horizontAuswahl().length;
     const neu = $('.co-halle').checked;

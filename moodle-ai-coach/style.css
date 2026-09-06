@@ -135,6 +135,17 @@
 a.co-logzeile:hover { text-decoration: underline; }
 .co-logfehler { color: #991b1b; }
 
+/* Beschriftung ueber einem Eingabefeld. Felder stehen UNTER ihrer Beschriftung,
+   nie daneben, und fuellen die Panelbreite. */
+.co-feldkopf {
+  display: block; margin-top: 10px; font-weight: 600; font-size: 13px; color: #334155;
+}
+/* Das Wunschfeld haengt nicht in einem .co-label, braucht die Breitenregel also selbst. */
+textarea.co-hwunsch {
+  display: block; width: 100%; box-sizing: border-box; margin-top: 4px; padding: 8px;
+  border: 1px solid #cbd5e1; border-radius: 6px; font-family: inherit; font-size: 13px;
+}
+
 /* Protokoll des Marker-Nachtragens: waechst waehrend des Laufs, deshalb gedeckelt
    und scrollbar, damit das Panel nicht bei jeder Frage in die Hoehe springt. */
 .co-marklog {

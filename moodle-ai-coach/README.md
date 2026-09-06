@@ -3,7 +3,7 @@
 Bewertet **kurze Freitextantworten** (ein bis drei Sätze) in Moodles Manueller
 Bewertung — Punkte **und** Sprachfeedback.
 
-Version 1.4.0 · vierte Erweiterung neben *Moodle AI Grader*, *Moodle AI Reviewer* und
+Version 1.5.0 · vierte Erweiterung neben *Moodle AI Grader*, *Moodle AI Reviewer* und
 *Notenstufen Autofill* · Lizenz: CC BY-SA 4.0 · A. Spielhoff
 
 ---
@@ -195,7 +195,7 @@ Am 28.08.2026 lesend am Hamburg-LMS verifiziert:
 Ein Trockenlauf mit genau dieser Logik ergab an einer echten Frage: 36 Felder,
 `sesskey` dabei, `cancel` nicht dabei, keine `undefined`-Werte, POST ≈ 3,9 KB.
 
-## Stand 1.4.0
+## Stand 1.5.0
 
 Der Bewertungsweg ist **einmal vollständig mit echten Daten gelaufen** (28.08.2026,
 Test „🕐 4.1 Kurztest Sicherheit", 78 Antworten auf 11 Freitextfragen): Auslesen,
@@ -205,6 +205,20 @@ Bewertungen** — der Beleg dafür, dass der Erwartungshorizont in der Frage fun
 
 **Fehlerfreie Antworten bekommen keinen Kommentar** (Entscheidung 28.08.2026). Der
 Eintrag geht trotzdem ins JSON, damit die Punkte gesetzt werden — nur ohne `text`.
+
+**1.5.0** — **Änderungswünsche gehen in den Horizont-Prompt.** Reiter 3 hat ein Feld
+  „Was soll anders werden?"; sein Inhalt steht im Prompt als eigener Abschnitt vor den
+  Aufgaben, mit dem Vorrang vor allem, was in `horizont_bisher` steht. Ohne dieses Feld
+  sah das Sprachmodell beim Neuschreiben nur den bisherigen Horizont — also genau das,
+  was geändert werden sollte — und schrieb ihn fort. (Aufgefallen an ChatGPT, das beim
+  Löschsand die Metallbrände als Muss beibehielt, obwohl sie entfallen sollten.) Der
+  Text überlebt das Neuladen der Seite.
+
+  Dazu zwei Korrekturen am Prompt selbst: Der Kopf behauptet nicht mehr, der Horizont
+  „fehle" — er sagt jetzt, dass ein vorhandener der **Ausgangspunkt und keine Vorlage
+  zum Abschreiben** ist. Und er weist darauf hin, dass die Kernaussage den Schülerinnen
+  und Schülern als Musterantwort gezeigt wird, also als vollständiger, einfacher Satz
+  zu schreiben ist.
 
 **1.4.0** — **Die Musterlösung setzt die Erweiterung selbst ein.** Liegt eine Antwort
   unter 100 %, hängt sie unter die Inhalt-Zeile ein „So hättest du es schreiben
