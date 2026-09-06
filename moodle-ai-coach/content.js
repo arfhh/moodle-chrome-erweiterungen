@@ -1,4 +1,4 @@
-/* Moodle AI Coach v1.2.0 — Bewertung kurzer Freitextantworten.
+/* Moodle AI Coach v1.4.0 — Bewertung kurzer Freitextantworten.
  *
  * Arbeitsteilung der drei Erweiterungen (Stand 05.09.2026):
  *   Grader   blau,    top 80px, Einzelfrageseite (slot=)        — EINE Freitextaufgabe mit Teilaufgaben
@@ -58,6 +58,50 @@
   const prozentText = (v) => String(Number(v)).replace('.', ',');
   const escapeHtml = (t) => String(t)
     .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+
+  // Aus den Feldern der KI wird HIER das Feedback gebaut, nicht im Prompt. Formvorgaben
+  // setzt kein Prompt zuverlaessig durch (Lehre aus den Blindvergleichen): Fett,
+  // Unterstreichung und Absaetze gehoeren deshalb ins Plugin. Die KI liefert nur die
+  // Sätze, gegliedert nach Inhalt, Rechtschreibung, Grammatik und Tipp.
+  // Reine Volltreffer bekommen die kurze Form: „Feedback: Das hast du super gemacht."
+  function rueckmeldungHtml(r, muster) {
+    if (!r || typeof r !== 'object') return '';
+    const z = (k) => String(r[k] || '').trim();
+    const lob = z('lob');
+    const teile = [
+      ['Inhalt', z('inhalt')],
+      ['Rechtschreibung', z('rechtschreibung')],
+      ['Grammatik', z('grammatik')],
+      ['Tipp', z('tipp')]
+    ].filter(([, t]) => t);
+
+    if (!teile.length && !lob) return '';
+    if (!teile.length) {
+      return '<p><strong><u>Feedback:</u></strong> ' + escapeHtml(lob) + '</p>';
+    }
+    let html = '<p><strong><u>Feedback</u></strong></p>';
+    if (lob) html += '<p>' + escapeHtml(lob) + '</p>';
+    teile.forEach(([kopf, text]) => {
+      html += '<p><u>' + kopf + ':</u> ' + escapeHtml(text) + '</p>';
+      // Die Musterloesung steht schon im Horizont — die Kernaussage IST der Satz, der
+      // die volle Punktzahl traegt. Sie hier anzuhaengen kostet kein einziges Token
+      // beim Sprachmodell und ist woertlich das, was die Lehrkraft hinterlegt hat.
+      if (kopf === 'Inhalt' && muster) {
+        html += '<p><u>So hättest du es schreiben können:</u> ' + escapeHtml(muster) + '</p>';
+      }
+    });
+    return html;
+  }
+
+  // Erste Zeile nach „Kernaussage:" aus dem Erwartungshorizont. Endet an der naechsten
+  // Abschnittsueberschrift; im Moodle-Feld stehen die Abschnitte direkt untereinander.
+  function kernaussage(horizont) {
+    const t = String(horizont || '').replace(/\r/g, '');
+    const m = t.match(/Kernaussage\s*:?\s*([\s\S]*?)(?=\n\s*(?:Muss enthalten|Auch richtig|Inhalt|Reicht nicht|Häufiger Fehler)\s*:|$)/i);
+    const satz = m ? m[1].replace(/\s+/g, ' ').trim() : '';
+    // Sehr lange Kernaussagen sind keine Musterloesung mehr, sondern ein Absatz.
+    return satz.length > 300 ? '' : satz;
+  }
 
   const el = (tag, cls, txt) => {
     const e = document.createElement(tag);
@@ -415,6 +459,8 @@
           }
           felder.set(e.markfeld, komma(e.punkte));
           if (e.text && e.kommentarfeld && felder.has(e.kommentarfeld)) {
+            // e.text ist bei der neuen Form schon fertiges HTML (aus rueckmeldungHtml);
+            // eine alte Fassung mit reinem Text bekommt hier ihre Absaetze.
             let html = e.text.trim();
             if (!/<[a-z]/i.test(html)) html = '<p>' + html.replace(/\n+/g, '</p><p>') + '</p>';
             if (kiHinweis) {
@@ -632,24 +678,62 @@ ${maxAb} % der Aufgabenpunkte eingestellt. 1 Fehler kostet ein Drittel davon,
 TEIL 3 – RÜCKMELDUNG
 ═══════════════════════════════════════════════════════
 
-Das Feedback ist das eigentliche Produkt. Es geht an Schülerinnen und Schüler, die
-sich mit dem Schreiben schwertun. Deshalb:
+Das Feedback ist das eigentliche Produkt. Es lesen Schülerinnen und Schüler der
+Mittelstufe, viele davon schreibschwach. Sie sollen daraus lernen — also schreibst du
+wie eine Deutschlehrkraft, die einem Vierzehnjährigen etwas erklärt.
 
-• Beginne mit „Du hast …" und bleib sachlich.
-• ZITIERE den fehlerhaften Satz wörtlich und schreibe ihn richtig daneben.
-  Nicht: „Achte auf den Satzbau."
-  Sondern: Du hast geschrieben: „…" – besser: „…"
-• Höchstens zwei solcher Korrekturen, sonst wird es erdrückend.
-• Danach ein Satz zum Inhalt: was fehlte oder was falsch war.
-• Zum Schluss eine mögliche richtige Lösung, angelehnt an die Kernaussage.
-• Kein Lob auf Vorrat, keine Floskeln, keine Emojis.
+SPRACHE — so schreibst du:
+• Kurze Hauptsätze. Ein Gedanke pro Satz. KEINE verschachtelten Sätze.
+• Sag die Regel, nicht nur die Korrektur.
+  Schwach: „Der Name wird großgeschrieben."
+  Gut:     „Vor „Löschsand" kannst du „der" setzen. Solche Wörter sind Nomen. Nomen
+            schreibt man groß: Löschsand."
+• Stell falsch und richtig direkt gegenüber: löchsand → Löschsand.
+  Lange Satzzitate sind für schwache Leser schwerer als ein Wortpaar.
+• Kein Fachjargon ohne Erklärung. „Nomen", „Satzende", „Komma" sind bekannt;
+  „Prädikat", „Kasus", „Numerus" erklärst du in eigenen Worten.
+• Höchstens zwei Korrekturen je Zeile. Der Rest bleibt ungesagt — lieber weniger,
+  das dafür verstanden.
+• Freundlich und sachlich. Keine Floskeln, keine Emojis, kein Ausrufezeichen-Gewitter.
 
-**Ist eine Antwort inhaltlich voll und sprachlich fehlerfrei, schreibst du KEINE
-Rückmeldung.** Lass das Feld „text" bei diesen Einträgen einfach weg. Ein Kommentar
-wie „Du hast „Handschuhe" geschrieben. Das entspricht der erwarteten Antwort." sagt
-niemandem etwas und nennt einem Schüler mit richtiger Antwort die richtige Antwort.
-Die Punktzahl steht ohnehin daneben. Ein leeres Kommentarfeld lenkt die Aufmerksamkeit
-auf die Rückmeldungen, in denen wirklich etwas steht.
+GLIEDERUNG — du schreibst KEINEN Fließtext, sondern füllst Felder:
+Aus ihnen baut die Erweiterung selbst das fertige Feedback mit Überschrift, Umbrüchen
+und Unterstreichungen. Schreib deshalb nirgends HTML, keine Sternchen, keine Zeilen-
+umbrüche in die Felder.
+
+  lob             – nur bei 95 % und mehr der Punkte: ein Satz Anerkennung,
+                    konkret auf die Aufgabe bezogen („Du hast die Aufgabe zum
+                    Löschsand richtig gut beantwortet.")
+  inhalt          – was inhaltlich fehlte oder falsch war, und wie es richtig heißt.
+                    Bei voller Punktzahl: was genau gut war.
+  rechtschreibung – nur Rechtschreibung: Groß- und Kleinschreibung, falsch
+                    geschriebene Wörter. Mit der Regel dahinter.
+  grammatik       – nur Satzbau und Zeichensetzung: fehlende Punkte und Kommas,
+                    Sätze ohne Trennung, falsche Fälle und Zeitformen.
+  tipp            – freiwillig: EIN Merksatz für das nächste Mal. Nur, wenn er wirklich
+                    hilft. Nicht bei jeder Antwort.
+
+Felder, zu denen es nichts zu sagen gibt, lässt du weg. Eine Antwort ohne
+Rechtschreibfehler bekommt keine Zeile „Rechtschreibung".
+
+DIE DREI FÄLLE:
+
+1. Volle Punktzahl, keine Sprachfehler → NUR das Feld „lob", sonst nichts.
+   Beispiel: lob = „Das hast du super beantwortet — Name und Funktion sind richtig."
+
+2. 95 % oder mehr, aber eine Kleinigkeit → zuerst „lob", dann die eine Zeile, die es
+   betrifft. Erst loben, dann verbessern.
+   Beispiel: lob = „Du hast die Aufgabe zum Löschsand richtig gut beantwortet."
+             grammatik = „Am Satzende fehlt der Punkt."
+
+3. Unter 95 % → kein Lob-Feld. Zuerst „inhalt", dann Rechtschreibung und Grammatik,
+   wo nötig.
+
+Die Musterlösung schreibst du NICHT. Liegt die Antwort unter 100 %, hängt die
+Erweiterung von sich aus die Zeile „So hättest du es schreiben können: …" an und setzt
+dort die Kernaussage aus dem Erwartungshorizont ein — wörtlich das, was die Lehrkraft
+hinterlegt hat. Im Feld „inhalt" steht deshalb nur, WAS fehlte oder falsch war, nicht
+die fertige Lösung.
 
 ═══════════════════════════════════════════════════════
 SCHRITT 1 – TABELLE ZUR PRÜFUNG
@@ -685,7 +769,14 @@ Erst nach „ok":
       "fehler": [
         { "art": "Nomen kleingeschrieben", "stelle": "zucker", "schwer": false }
       ],
-      "text": "Du hast geschrieben: „…" – besser: „…" Gesucht war …" }
+      "rueckmeldung": {
+        "inhalt": "Du hast geschrieben, dass Hefe Zucker umwandelt. Das stimmt. Es fehlt, was dabei entsteht: Alkohol und Kohlenstoffdioxid.",
+        "rechtschreibung": "Vor „Zucker" kannst du „der" setzen. Solche Wörter sind Nomen, und Nomen schreibt man groß: Zucker.",
+        "grammatik": "Am Satzende fehlt der Punkt."
+      } },
+    { "frage": "Löschsand (AFB I)", "qubaid": "2433020", "slot": "6",
+      "inhalt": 100, "fehler": [],
+      "rueckmeldung": { "lob": "Das hast du super beantwortet — Name und Funktion sind richtig." } }
   ]
 }
 \`\`\`
@@ -693,9 +784,12 @@ Erst nach „ok":
 • Ein Eintrag je Versuch. „qubaid" und „slot" unverändert aus den Daten.
 • „inhalt" ist der Prozentwert aus der Abstufung des Horizonts.
 • „fehler" ist die Liste der gezählten Sprachfehler, leer bei fehlerfreiem Text.
-• „text" ist die Rückmeldung an die Schülerin oder den Schüler. **Bei einer
-  fehlerfreien Volltreffer-Antwort lässt du „text" weg** — der Eintrag steht dann nur
-  mit „inhalt" und leerem „fehler" da, damit die Punkte trotzdem eingetragen werden.
+• „rueckmeldung" enthält die Felder aus Teil 3. Nur die füllen, zu denen es etwas zu
+  sagen gibt; leere Felder ganz weglassen. Jedes Feld ist ein oder zwei ganze Sätze,
+  ohne Zeilenumbruch und ohne Formatierungszeichen — Überschrift, Absätze und
+  Unterstreichungen setzt die Erweiterung selbst.
+• JEDER Eintrag bekommt eine Rückmeldung, auch die fehlerfreien: dort steht das
+  Lob-Feld allein.
 • Keine Punktzahlen, kein Abzug, keine Feldnamen.
 
 Schreibe darunter: „Kopiere diesen Block in die Erweiterung, Reiter „2 · Eintragen",
@@ -1357,8 +1451,16 @@ AUFGABEN OHNE ERWARTUNGSHORIZONT
           throw new Error(`Eintrag ${nr}: „inhalt" ist kein Prozentwert (${e.inhalt}).`);
         }
         const r = punkteRechnen(a.max, inhalt, e.fehler);
+        // Neue Form: gegliederte Rueckmeldung, aus der das Plugin das HTML baut.
+        // Alte Form („text" als fertiger Satz) bleibt gueltig, damit gespeicherte
+        // eigene Prompts weiter funktionieren.
+        // Musterloesung nur, wenn inhaltlich etwas fehlte — bei voller Punktzahl waere
+        // sie eine Belehrung fuer eine richtige Antwort.
+        const frageDaten = (ausgabe.fragen && ausgabe.fragen[a.frage]) || {};
+        const muster = inhalt < 100 ? kernaussage(frageDaten.horizont) : '';
+        const rmText = rueckmeldungHtml(e.rueckmeldung, muster) || String(e.text || '').trim();
         raus.push({
-          ...a, inhalt, fehler: e.fehler || [], text: (e.text || '').trim(),
+          ...a, inhalt, fehler: e.fehler || [], text: rmText,
           punkte: r.punkte, gewicht: r.gewicht, abzug: r.abzug,
           rechnung: `Inhalt ${prozentText(inhalt)} % = ${komma(r.inhaltPunkte)} · `
             + `${r.gewicht} Fehlerpunkt(e) → −${prozentText(Math.round(r.abzug * 10) / 10)} % · `
@@ -1367,9 +1469,10 @@ AUFGABEN OHNE ERWARTUNGSHORIZONT
       });
 
       eintraege = raus;
-      // Eine fehlerfreie Volltreffer-Antwort braucht keinen Kommentar — sonst
-      // meldet die Prüfung bei einem guten Kurs zwanzig „fehlende" Texte.
-      const ohneText = raus.filter((e) => !e.text && (e.inhalt < 100 || e.gewicht > 0)).length;
+      // Seit der gegliederten Rückmeldung bekommt JEDER Eintrag einen Text — die
+      // fehlerfreien ein Lob. Ein Eintrag ohne Text ist deshalb ein Hinweis auf ein
+      // vergessenes Feld, nicht mehr der Normalfall.
+      const ohneText = raus.filter((e) => !e.text).length;
       const seiten = new Set(raus.map((e) => e.slot + '|' + e.qid)).size;
       info.className = 'co-pinfo co-ok';
       info.textContent = `✓ ${raus.length} Bewertungen auf ${seiten} Fragenseiten — bereit. `

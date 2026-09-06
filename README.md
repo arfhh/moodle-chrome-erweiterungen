@@ -16,14 +16,14 @@ liest die **Antwort als JSON** wieder ein — welchen Chat du benutzt, entscheid
 |---|---|---|---|
 | **Moodle AI Grader** · [Quelltext](moodle-ai-grader/) | 3.0.1 | **[⬇ ZIP](https://github.com/arfhh/moodle-chrome-erweiterungen/raw/main/dist/moodle-ai-grader.zip)** | **Klausuren** mit mehreren Aufgaben in einer Freitextfrage: legt Erwartungshorizont und Antwortvorlage in der Frage an, erzeugt Bewertungs-Prompts, rechnet die Punkte und trägt sie mit begründetem Feedback zurück |
 | **Moodle AI Reviewer** · [Quelltext](moodle-ai-reviewer/) | 1.5.7 | **[⬇ ZIP](https://github.com/arfhh/moodle-chrome-erweiterungen/raw/main/dist/moodle-ai-reviewer.zip)** | **Nachbewerten**: findet frei eingetippte Antworten (Cloze-Lücken, Kurzantwort, Numerisch), die Moodle nicht erkannt hat, und trägt Punkte und Feedback nach |
-| **Moodle AI Coach** · [Quelltext](moodle-ai-coach/) | 1.2.0 | **[⬇ ZIP](https://github.com/arfhh/moodle-chrome-erweiterungen/raw/main/dist/moodle-ai-coach.zip)** | **Kurze Freitextantworten** (2–3 Sätze): liest den Erwartungshorizont aus der Frage, bewertet und gibt Sprachfeedback |
+| **Moodle AI Coach** · [Quelltext](moodle-ai-coach/) | 1.4.0 | **[⬇ ZIP](https://github.com/arfhh/moodle-chrome-erweiterungen/raw/main/dist/moodle-ai-coach.zip)** | **Kurze Freitextantworten** (2–3 Sätze): liest den Erwartungshorizont aus der Frage, bewertet und gibt Sprachfeedback |
 | **Moodle Cloze Autofill** · [Quelltext](moodle-cloze-autofill/) | 2.0.4 | **[⬇ ZIP](https://github.com/arfhh/moodle-chrome-erweiterungen/raw/main/dist/moodle-cloze-autofill.zip)** | **Fragensammlung pflegen**: trägt neue Antwortvarianten in Cloze-Lücken ein, statt Frage für Frage von Hand |
 | **Moodle Notenstufen Autofill** · [Quelltext](notenstufen-extension/) | 2.7.0 | **[⬇ ZIP](https://github.com/arfhh/moodle-chrome-erweiterungen/raw/main/dist/notenstufen-extension.zip)** | **Notenstufen-Tabelle** eines Kurses auf einen Klick ausfüllen |
 
 Jeder Ordner hat eine eigene, ausführliche `README.md` — dort stehen Bedienung,
 Bewertungsmaßstab, Grenzen und die Änderungsgeschichte.
 
-> **Der Coach ist jung (1.2.0).** Der Bewertungsweg ist einmal vollständig mit
+> **Der Coach ist jung (1.4.0).** Der Bewertungsweg ist einmal vollständig mit
 > echten Daten gelaufen, das Zurückschreiben des Erwartungshorizonts in die Frage
 > aber noch nicht. Beim ersten Einsatz mit **einer** Frage anfangen.
 

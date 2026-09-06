@@ -3,7 +3,7 @@
 Bewertet **kurze Freitextantworten** (ein bis drei Sätze) in Moodles Manueller
 Bewertung — Punkte **und** Sprachfeedback.
 
-Version 1.2.0 · vierte Erweiterung neben *Moodle AI Grader*, *Moodle AI Reviewer* und
+Version 1.4.0 · vierte Erweiterung neben *Moodle AI Grader*, *Moodle AI Reviewer* und
 *Notenstufen Autofill* · Lizenz: CC BY-SA 4.0 · A. Spielhoff
 
 ---
@@ -195,7 +195,7 @@ Am 28.08.2026 lesend am Hamburg-LMS verifiziert:
 Ein Trockenlauf mit genau dieser Logik ergab an einer echten Frage: 36 Felder,
 `sesskey` dabei, `cancel` nicht dabei, keine `undefined`-Werte, POST ≈ 3,9 KB.
 
-## Stand 1.2.0
+## Stand 1.4.0
 
 Der Bewertungsweg ist **einmal vollständig mit echten Daten gelaufen** (28.08.2026,
 Test „🕐 4.1 Kurztest Sicherheit", 78 Antworten auf 11 Freitextfragen): Auslesen,
@@ -205,6 +205,31 @@ Bewertungen** — der Beleg dafür, dass der Erwartungshorizont in der Frage fun
 
 **Fehlerfreie Antworten bekommen keinen Kommentar** (Entscheidung 28.08.2026). Der
 Eintrag geht trotzdem ins JSON, damit die Punkte gesetzt werden — nur ohne `text`.
+
+**1.4.0** — **Die Musterlösung setzt die Erweiterung selbst ein.** Liegt eine Antwort
+  unter 100 %, hängt sie unter die Inhalt-Zeile ein „So hättest du es schreiben
+  können: …" und trägt dort die **Kernaussage aus dem Erwartungshorizont** ein —
+  wörtlich das, was die Lehrkraft hinterlegt hat. Das kostet kein einziges Token beim
+  Sprachmodell und kann nicht abweichen. Der Prompt sagt der KI ausdrücklich, dass sie
+  die Musterlösung nicht schreiben soll. Bei voller Punktzahl entfällt die Zeile.
+
+**1.3.0** — **Das Feedback ist neu gebaut — für die Schülerinnen und Schüler, nicht
+  für die Lehrkraft.** Bisher kam ein Fließtext mit verschachtelten Sätzen und ohne
+  Umbrüche; schwache Leser konnten damit nichts anfangen. Jetzt liefert die KI keine
+  fertigen Sätze mehr, sondern **Felder** — `lob`, `inhalt`, `rechtschreibung`,
+  `grammatik`, `tipp` —, und die Erweiterung baut daraus das Feedback mit Überschrift,
+  eigenen Absätzen und unterstrichenen Zwischenüberschriften. Formvorgaben setzt kein
+  Prompt zuverlässig durch, deshalb liegt die Form jetzt im Plugin.
+
+  Neu auch der Ton: kurze Hauptsätze, die Regel statt nur der Korrektur („Vor
+  ‚Löschsand' kannst du ‚der' setzen. Solche Wörter sind Nomen, und Nomen schreibt man
+  groß."), falsch und richtig als Wortpaar statt langer Satzzitate, höchstens zwei
+  Korrekturen je Zeile.
+
+  Und: **Ab 95 % wird gelobt, erst dann verbessert.** Eine fehlerfreie Volltreffer-
+  Antwort bekommt jetzt ein kurzes Lob statt gar keinen Kommentar — das kehrt die
+  frühere Regel um. Die alte Form (`text` als fertiger Satz) wird weiter angenommen,
+  damit gespeicherte eigene Prompts nicht brechen.
 
 **1.2.0** — Der Bewertungs-Prompt bekommt einen **Schritt 3: „Horizont nachziehen"**.
   Hat die Lehrkraft in der Prüftabelle Prozentwerte korrigiert, benennt die KI nach dem
