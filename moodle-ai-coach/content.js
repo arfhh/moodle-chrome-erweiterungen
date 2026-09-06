@@ -1,4 +1,4 @@
-/* Moodle AI Coach v1.5.0 — Bewertung kurzer Freitextantworten.
+/* Moodle AI Coach v1.6.0 — Bewertung kurzer Freitextantworten.
  *
  * Arbeitsteilung der drei Erweiterungen (Stand 05.09.2026):
  *   Grader   blau,    top 80px, Einzelfrageseite (slot=)        — EINE Freitextaufgabe mit Teilaufgaben
@@ -264,7 +264,7 @@
       .replace(/\s+/g, ' ').trim();
   };
 
-  function werteSeiteAus(doc, zeile) {
+  async function werteSeiteAus(doc, zeile) {
     const bloecke = [...doc.querySelectorAll('.que')];
     if (!bloecke.length) return null;
     // Nur Essay-Fragen: die Antwort steht in einem readonly-Textarea mit dieser
@@ -273,13 +273,24 @@
 
     const erste = bloecke[0];
     const gi = erste.querySelector('.graderinfo');
-    const horizontRoh = gi ? gi.innerText.trim() : '';
+    let horizontRoh = gi ? gi.innerText.trim() : '';
+    const fassung = fassungAusAbzeichen(erste);
+    let nachgeladen = null;
+    // Meldet das Abzeichen eine neuere Fassung, gilt deren Horizont: Er ist der
+    // aktuelle Massstab der Lehrkraft, auch wenn der Versuch an einer aelteren haengt.
+    if (fassung && fassung.gesamt > fassung.ist) {
+      try {
+        const neu = await neuesterHorizont(zeile.qid);
+        if (neu && neu.horizont) { horizontRoh = neu.horizont; nachgeladen = fassung.gesamt; }
+      } catch (e) { /* dann bleibt der Stand der Bewertungsseite */ }
+    }
     const frage = {
       name: zeile.name, qid: zeile.qid, slot: zeile.slot,
       aufgabe: txt(erste.querySelector('.qtext')),
       zustaendig: zustaendigkeit(horizontRoh),
       horizont: horizontOhneMarker(horizontRoh),
-      max: num((erste.querySelector('input[name$="-maxmark"]') || {}).value) ?? 1
+      max: num((erste.querySelector('input[name$="-maxmark"]') || {}).value) ?? 1,
+      ...(nachgeladen ? { horizont_aus_fassung: nachgeladen } : {})
     };
 
     const versuche = [];
@@ -320,7 +331,7 @@
         const z = warteschlange.shift();
         try {
           const doc = await fetchDoc(seiteUrl(z.slot, z.qid, 'all'));
-          const res = werteSeiteAus(doc, z);
+          const res = await werteSeiteAus(doc, z);
           if (!res) { keinEssay++; }
           else {
             const schluessel = res.frage.name || (z.slot + '|' + z.qid);
@@ -504,6 +515,55 @@
   }
 
   /* ================= Zurückschreiben: Erwartungshorizont ================= */
+
+  // ---- Den Horizont der NEUESTEN Fragenfassung holen -------------------------
+  //
+  // Auf der Bewertungsseite steht immer die Fassung, mit der der Versuch geschrieben
+  // wurde ("v1 (von 5)"). Aenderungen am Horizont landen aber in einer neuen Fassung,
+  // und die sieht man dort nie. Wer den Horizont nachtraegt oder neu schreibt, bewertet
+  // sonst weiter nach dem alten Massstab — und der Marker fehlt scheinbar.
+  //
+  // Der Weg zur neuesten Fassung ist dreistufig, weil Moodle keine Abkuerzung anbietet:
+  // Bearbeiten-Formular der bekannten id -> "Verlauf"-Link mit entryid -> letzte Zeile
+  // der Verlaufstabelle -> deren Frage-id. Das laeuft nur fuer Fragen, deren Abzeichen
+  // eine neuere Fassung meldet, und nur einmal je Frage.
+  function fassungAusAbzeichen(block) {
+    const b = [...block.querySelectorAll('.badge, .info span')]
+      .map((e) => e.textContent.trim())
+      .find((t) => /^v\d+\s*\(von\s*\d+\)$/i.test(t));
+    const m = b && b.match(/^v(\d+)\s*\(von\s*(\d+)\)$/i);
+    return m ? { ist: +m[1], gesamt: +m[2] } : null;
+  }
+
+  async function neuesterHorizont(qid) {
+    // Schritt 1: Formular der bekannten Fassung, darin der Verlauf-Link.
+    const doc = await fetchDoc(fragenUrl(qid));
+    const verlauf = [...doc.querySelectorAll('a')]
+      .find((a) => /history\.php/.test(a.getAttribute('href') || ''));
+    if (!verlauf) return null;
+
+    // Schritt 2: Verlaufstabelle. Die letzte Zeile ist die neueste Fassung.
+    const hist = await fetchDoc(new URL(verlauf.getAttribute('href'), fragenUrl(qid)).href);
+    const zeilen = [...hist.querySelectorAll('table tbody tr')];
+    if (!zeilen.length) return null;
+    let neueId = null;
+    for (const tr of zeilen) {
+      for (const a of tr.querySelectorAll('a')) {
+        const m = (a.getAttribute('href') || '').match(/question\.php\?[^"']*?\bid=(\d+)/);
+        if (m) { neueId = m[1]; break; }
+      }
+    }
+    if (!neueId || String(neueId) === String(qid)) return null;
+
+    // Schritt 3: Horizont aus dem Formular der neuesten Fassung.
+    const neu = await fetchDoc(fragenUrl(neueId));
+    const feld = neu.querySelector('[name="graderinfo[text]"]');
+    if (!feld) return null;
+    const hilf = document.createElement('div');
+    hilf.innerHTML = String(feld.value || '');
+    const text = hilf.innerText.trim();
+    return text ? { qid: neueId, horizont: text } : null;
+  }
 
   // Schreibt den Horizont in das Moodle-Feld graderinfo der Frage. Technisch
   // dasselbe Muster wie beim Punkte-Eintragen: Bearbeiten-Formular vollständig
@@ -1269,10 +1329,16 @@ AUFGABEN OHNE ERWARTUNGSHORIZONT
       const ohneH = Object.values(ausgabe.fragen).filter((f) => !f.horizont);
 
       const fremde = Object.values(ausgabe.fremde || {});
+      // Fragen, deren Horizont aus einer neueren Fassung geholt wurde, als der Versuch
+      // sie kennt — der Hinweis erklaert, warum im Prompt etwas anderes steht als auf
+      // der Seite darunter.
+      const nachgeladen = Object.values(ausgabe.fragen)
+        .filter((f) => f.horizont_aus_fassung).length;
       $('.co-summary').textContent =
         `${m.antworten} Antworten auf ${Object.keys(ausgabe.fragen).length} Freitextfragen · `
         + `${mitH.length} mit Horizont, ${ohneH.length} ohne · ${m.uebersprungen} übersprungen`
-        + (fremde.length ? ` · ${fremde.length} nicht für den Coach` : '');
+        + (fremde.length ? ` · ${fremde.length} nicht für den Coach` : '')
+        + (nachgeladen ? ` · ${nachgeladen} Horizont(e) aus der neuesten Fragenfassung geholt` : '');
 
       const warn = $('.co-warn');
       if (ohneH.length) {

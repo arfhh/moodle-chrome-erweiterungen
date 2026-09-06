@@ -3,7 +3,7 @@
 Bewertet **kurze Freitextantworten** (ein bis drei Sätze) in Moodles Manueller
 Bewertung — Punkte **und** Sprachfeedback.
 
-Version 1.5.0 · vierte Erweiterung neben *Moodle AI Grader*, *Moodle AI Reviewer* und
+Version 1.6.0 · vierte Erweiterung neben *Moodle AI Grader*, *Moodle AI Reviewer* und
 *Notenstufen Autofill* · Lizenz: CC BY-SA 4.0 · A. Spielhoff
 
 ---
@@ -195,7 +195,7 @@ Am 28.08.2026 lesend am Hamburg-LMS verifiziert:
 Ein Trockenlauf mit genau dieser Logik ergab an einer echten Frage: 36 Felder,
 `sesskey` dabei, `cancel` nicht dabei, keine `undefined`-Werte, POST ≈ 3,9 KB.
 
-## Stand 1.5.0
+## Stand 1.6.0
 
 Der Bewertungsweg ist **einmal vollständig mit echten Daten gelaufen** (28.08.2026,
 Test „🕐 4.1 Kurztest Sicherheit", 78 Antworten auf 11 Freitextfragen): Auslesen,
@@ -205,6 +205,15 @@ Bewertungen** — der Beleg dafür, dass der Erwartungshorizont in der Frage fun
 
 **Fehlerfreie Antworten bekommen keinen Kommentar** (Entscheidung 28.08.2026). Der
 Eintrag geht trotzdem ins JSON, damit die Punkte gesetzt werden — nur ohne `text`.
+
+**1.6.0** — **Der Horizont kommt jetzt aus der neuesten Fragenfassung.** Moodle zeigt
+  auf der Bewertungsseite immer die Fassung, mit der der Versuch geschrieben wurde
+  (Abzeichen „v1 (von 5)"). Änderungen am Horizont landen aber in einer neuen Fassung —
+  der Coach las also weiter den alten Maßstab und meldete den frisch eingetragenen
+  Marker als fehlend. Er wertet das Abzeichen jetzt aus und holt bei veralteten Fragen
+  den Horizont über den Frageverlauf aus der neuesten Fassung; die Zusammenfassung sagt,
+  bei wie vielen Fragen das nötig war. Das kostet zwei bis drei zusätzliche Seitenaufrufe
+  je betroffener Frage, aber nur einmal je Frage und nur, wenn das Abzeichen es meldet.
 
 **1.5.0** — **Änderungswünsche gehen in den Horizont-Prompt.** Reiter 3 hat ein Feld
   „Was soll anders werden?"; sein Inhalt steht im Prompt als eigener Abschnitt vor den
