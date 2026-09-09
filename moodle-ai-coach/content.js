@@ -1,4 +1,4 @@
-/* Moodle AI Coach v1.6.0 — Bewertung kurzer Freitextantworten.
+/* Moodle AI Coach v1.7.0 — Bewertung kurzer Freitextantworten.
  *
  * Arbeitsteilung der drei Erweiterungen (Stand 05.09.2026):
  *   Grader   blau,    top 80px, Einzelfrageseite (slot=)        — EINE Freitextaufgabe mit Teilaufgaben
@@ -64,7 +64,7 @@
   // Unterstreichung und Absaetze gehoeren deshalb ins Plugin. Die KI liefert nur die
   // Sätze, gegliedert nach Inhalt, Rechtschreibung, Grammatik und Tipp.
   // Reine Volltreffer bekommen die kurze Form: „Feedback: Das hast du super gemacht."
-  function rueckmeldungHtml(r, muster) {
+  function rueckmeldungHtml(r, muster, punkte) {
     if (!r || typeof r !== 'object') return '';
     const z = (k) => String(r[k] || '').trim();
     const lob = z('lob');
@@ -79,10 +79,29 @@
     if (!teile.length) {
       return '<p><strong><u>Feedback:</u></strong> ' + escapeHtml(lob) + '</p>';
     }
+    // Punkteaufschlüsselung (seit 1.7.0): Moodle zeigt neben der Frage nur die
+    // Gesamtpunktzahl — dezent, aber sichtbar hinter der jeweiligen Zeile ergänzen,
+    // damit "inhaltlich schwach" und "inhaltlich gut, aber viele Fehler" für die
+    // Schülerin/den Schüler unterscheidbar bleiben. Kursiv, grau, in Klammern, am
+    // Zeilenende. Der Abzug steht EINMAL GESAMT hinter der letzten Sprachzeile, nicht
+    // je Kategorie — er wird aus der Gesamtfehlerzahl berechnet, nicht pro Zeile.
+    const vorhandeneKoepfe = teile.map(([k]) => k);
+    const letzteSprachzeile = vorhandeneKoepfe.includes('Grammatik') ? 'Grammatik'
+      : (vorhandeneKoepfe.includes('Rechtschreibung') ? 'Rechtschreibung' : null);
+    const punktSpan = (t) => '<span style="color:#767676;font-style:italic;"> (' + t + ')</span>';
+
     let html = '<p><strong><u>Feedback</u></strong></p>';
     if (lob) html += '<p>' + escapeHtml(lob) + '</p>';
     teile.forEach(([kopf, text]) => {
-      html += '<p><u>' + kopf + ':</u> ' + escapeHtml(text) + '</p>';
+      let zusatz = '';
+      if (punkte) {
+        if (kopf === 'Inhalt' && punkte.inhalt != null) {
+          zusatz = punktSpan(komma(punkte.inhalt) + ' Punkte');
+        } else if (kopf === letzteSprachzeile && punkte.abzug) {
+          zusatz = punktSpan('−' + komma(punkte.abzug) + ' Punkte');
+        }
+      }
+      html += '<p><u>' + kopf + ':</u> ' + escapeHtml(text) + zusatz + '</p>';
       // Die Musterloesung steht schon im Horizont — die Kernaussage IST der Satz, der
       // die volle Punktzahl traegt. Sie hier anzuhaengen kostet kein einziges Token
       // beim Sprachmodell und ist woertlich das, was die Lehrkraft hinterlegt hat.
@@ -234,6 +253,9 @@
     return {
       gewicht, abzug: ab,
       inhaltPunkte: Math.round(max * inhaltProzent / 100 * 100) / 100,
+      // Punkte statt Prozent, fuers Feedback (1.7.0) — der Prozentwert bleibt fuer
+      // die bestehende Rechnungs-Zeile in der Vorschau erhalten.
+      abzugPunkte: Math.round(max * ab / 100 * 100) / 100,
       punkte: Math.max(0, Math.round(roh * 100) / 100)
     };
   }
@@ -1554,7 +1576,7 @@ AUFGABEN OHNE ERWARTUNGSHORIZONT
         // sie eine Belehrung fuer eine richtige Antwort.
         const frageDaten = (ausgabe.fragen && ausgabe.fragen[a.frage]) || {};
         const muster = inhalt < 100 ? kernaussage(frageDaten.horizont) : '';
-        const rmText = rueckmeldungHtml(e.rueckmeldung, muster) || String(e.text || '').trim();
+        const rmText = rueckmeldungHtml(e.rueckmeldung, muster, { inhalt: r.inhaltPunkte, abzug: r.abzugPunkte }) || String(e.text || '').trim();
         raus.push({
           ...a, inhalt, fehler: e.fehler || [], text: rmText,
           punkte: r.punkte, gewicht: r.gewicht, abzug: r.abzug,

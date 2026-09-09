@@ -3,7 +3,7 @@
 Bewertet **kurze Freitextantworten** (ein bis drei Sätze) in Moodles Manueller
 Bewertung — Punkte **und** Sprachfeedback.
 
-Version 1.6.0 · vierte Erweiterung neben *Moodle AI Grader*, *Moodle AI Reviewer* und
+Version 1.7.0 · vierte Erweiterung neben *Moodle AI Grader*, *Moodle AI Reviewer* und
 *Notenstufen Autofill* · Lizenz: CC BY-SA 4.0 · A. Spielhoff
 
 ---
@@ -205,6 +205,18 @@ Bewertungen** — der Beleg dafür, dass der Erwartungshorizont in der Frage fun
 
 **Fehlerfreie Antworten bekommen keinen Kommentar** (Entscheidung 28.08.2026). Der
 Eintrag geht trotzdem ins JSON, damit die Punkte gesetzt werden — nur ohne `text`.
+
+**1.7.0** — **Punkteaufschlüsselung im Schüler-Feedback.** Moodle zeigt neben der
+  Frage nur die Gesamtpunktzahl, z. B. „(0,7 Punkte)" — der Unterschied zwischen
+  „inhaltlich schwach" und „inhaltlich gut, aber viele Fehler" blieb dadurch
+  unsichtbar. Die Erweiterung hängt jetzt die Punkteanteile selbst an die jeweilige
+  Zeile des Feedbacks an: hinter die Inhalt-Zeile die Inhaltspunkte, hinter die
+  letzte Sprachzeile (Rechtschreibung oder Grammatik, je nachdem was vorkommt) der
+  Gesamtabzug — kursiv, grau, in Klammern, am Zeilenende. Der Abzug steht einmal
+  gesamt dort, nicht je Sprachkategorie aufgeteilt, weil er aus der Gesamtfehlerzahl
+  berechnet wird. Rechnet das Plugin, nicht die KI — `punkteRechnen()` kannte
+  Inhaltspunkte und Abzugsprozent schon, `abzugPunkte` kommt neu dazu. Kein neues
+  Feld im JSON, keine zusätzlichen Token.
 
 **1.6.0** — **Der Horizont kommt jetzt aus der neuesten Fragenfassung.** Moodle zeigt
   auf der Bewertungsseite immer die Fassung, mit der der Versuch geschrieben wurde
