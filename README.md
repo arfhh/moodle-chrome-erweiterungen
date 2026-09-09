@@ -147,6 +147,15 @@ Bildschirm passiert ist (oder eben nicht).
 
 ---
 
+## Womit diese Erweiterungen gebaut werden
+
+Die Claude-Skills hinter diesen Erweiterungen — und weitere für H5P und für
+Moodle-Testfragen — liegen in einem eigenen Repo:
+<https://github.com/arfhh/lehrkraft-werkzeuge>. Dort gibt es sie als Plugin
+zum Installieren oder als ZIP zum Selbsteinrichten.
+
+---
+
 ## Lizenz und Urheber
 
 **CC BY-SA 4.0** — Weitergabe und Bearbeitung erlaubt, mit Namensnennung, und unter
