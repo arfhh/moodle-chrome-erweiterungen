@@ -251,7 +251,11 @@
     // Streng: nur Fragen bewerten, deren Horizont ausdruecklich „[moodle-ai-coach]"
     // sagt. Standardmaessig aus, sonst wuerde der Coach auf einem noch nicht
     // markierten Bestand gar nichts mehr bewerten.
-    nurMitMarker: false
+    nurMitMarker: false,
+    // Standardmaessig AUS, wie beim Reviewer: der volle Prompt ist die Fassung, die
+    // fuer jede KI (auch ohne eigene Skills) sicher funktioniert. Bewusst per
+    // Haekchen einschaltbar, nicht als Bedingung im Prompt selbst.
+    kompaktPrompt: false
   };
   let optionen = { ...OPT_STANDARD };
   // Gilt nur fuer den aktuellen Ernte-Durchlauf, wird nie gespeichert: erzwingt die
@@ -933,6 +937,11 @@ Erst nach „ok":
 • JEDER Eintrag bekommt eine Rückmeldung, auch die fehlerfreien: dort steht das
   Lob-Feld allein.
 • Keine Punktzahlen, kein Abzug, keine Feldnamen.
+• WICHTIG – Anführungszeichen im JSON: Willst du in einem Rückmeldungstext ein Wort
+  hervorheben oder ein Zitat setzen, benutze dafür EINFACHE Anführungszeichen ('so')
+  oder schreibe es ohne Anführungszeichen. Gerade doppelte Anführungszeichen ("so")
+  NIEMALS in einem JSON-Textfeld verwenden – das ist dasselbe Zeichen wie die
+  JSON-Begrenzung und macht das ganze JSON kaputt. Das ist schon mehrfach passiert.
 
 Schreibe darunter: „Kopiere diesen Block in die Erweiterung, Reiter „2 · Eintragen",
 und klicke dort auf „🔍 Prüfen"."
@@ -1062,9 +1071,106 @@ AUFGABEN OHNE ERWARTUNGSHORIZONT
 [MOODLE_AI_COACH_AUFGABEN]`;
   }
 
+  // Kompakte Fassung: setzt voraus, dass die KI die Skills "2-didaktik-bewertung"
+  // (Bewertungsstufen, Notenmodell, Sprachabzug, Feedbackregeln) und
+  // "3-moodle-erweiterungen" (Zustaendigkeits-Marker Coach/Grader) von A. Spielhoff
+  // kennt. Das Ausgabeformat (Tabelle, JSON-Schema, Horizont-Nachziehen) ist NICHT
+  // Teil dieser Skills und bleibt deshalb ausgeschrieben.
+  function kompaktPromptVorlage() {
+    const maxAb = optionen.maxSprachabzug ?? OPT_STANDARD.maxSprachabzug;
+    return `═══════════════════════════════════════════════════════
+MOODLE AI COACH – BEWERTUNG (KOMPAKTER PROMPT)
+═══════════════════════════════════════════════════════
+
+Falls du Zugriff auf die Skills „2-didaktik-bewertung“ und „3-moodle-erweiterungen“
+von A. Spielhoff hast: Wende deren Bewertungslogik an — Inhalt strikt getrennt von
+Sprache, die Abstufung im Horizont ist verbindlich (keine eigene Skala erfinden),
+Sprachfehler zählen (schwer = doppelt) statt selbst Punkte abzuziehen, die
+Feedback-Gliederung in Felder (lob/inhalt/rechtschreibung/grammatik/tipp) mit
+kurzen, schülergerechten Sätzen für die Mittelstufe, und die drei Rückmeldungsfälle
+(volle Punktzahl → nur Lob; ≥95 % → Lob zuerst; darunter → kein Lob).
+
+Hast du diese Skills NICHT: Bitte um den ausführlichen Prompt (⚙ → Häkchen
+„Kompakter Prompt“ ausschalten) statt zu raten — ohne die genauen Regeln (besonders
+die Trennung Inhalt/Sprache und die Feld-Gliederung) sind falsche Bewertungen und
+unpassendes Feedback wahrscheinlich.
+
+Höchstabzug für Sprache ist gerade auf ${maxAb} % der Aufgabenpunkte eingestellt:
+1 Fehler kostet ein Drittel davon, 2 die Hälfte, 3 zwei Drittel, 4 fünf Sechstel,
+ab 5 den vollen Abzug. Punkte NICHT selbst ausrechnen, nur Inhalt-Prozent und
+Fehlerliste angeben — das rechnet die Erweiterung.
+
+═══════════════════════════════════════════════════════
+SCHRITT 1 – TABELLE ZUR PRÜFUNG
+═══════════════════════════════════════════════════════
+
+Gib zuerst alle Antworten aus, nach Frage gruppiert, mit Kopfzeile (Aufgabe +
+Kernaussage aus dem Horizont), dann eine Tabelle:
+
+| Nr | Antwort (gekürzt) | Inhalt | Sprachfehler | Begründung |
+|---|---|---|---|---|
+
+„Nr“ ist die Zahl aus „nr“ im Datensatz. Keine Punkte- und keine Abzugsspalte. Halte
+danach an und frage: „Passt das so? Nenne mir die Nummern, die ich ändern soll, zum
+Beispiel: 3 auf 75. Wenn alles stimmt, antworte mit ok.“ Warte auf die Antwort.
+
+═══════════════════════════════════════════════════════
+SCHRITT 2 – JSON
+═══════════════════════════════════════════════════════
+
+Erst nach „ok“ ausgeben:
+
+\`\`\`json
+{
+  "bewertungen": [
+    { "frage": "alkoholischen Gärung (AFB I)", "qubaid": "2433013", "slot": "6",
+      "inhalt": 50,
+      "fehler": [
+        { "art": "Nomen kleingeschrieben", "stelle": "zucker", "schwer": false }
+      ],
+      "rueckmeldung": {
+        "inhalt": "…",
+        "rechtschreibung": "…",
+        "grammatik": "…"
+      } }
+  ]
+}
+\`\`\`
+
+Ein Eintrag je Versuch, „qubaid“/„slot“ unverändert übernehmen. „inhalt“ ist der
+Prozentwert aus der Horizont-Abstufung. „fehler“ leer bei fehlerfreiem Text.
+„rueckmeldung“ nur die Felder füllen, zu denen es etwas zu sagen gibt (leere Felder
+weglassen), jedes ein bis zwei ganze Sätze ohne Formatierung. Musterlösung NICHT
+selbst schreiben — das hängt die Erweiterung an. WICHTIG: Hebst du in einem
+Rückmeldungstext ein Wort hervor, benutze dafür einfache Anführungszeichen ('so'),
+nie gerade doppelte ("so") — die brechen das JSON, weil sie die JSON-Begrenzung
+sind. Satz danach: „Kopiere diesen Block
+in die Erweiterung, Reiter „2 · Eintragen“, und klicke dort auf „🔍 Prüfen“.“
+
+═══════════════════════════════════════════════════════
+SCHRITT 3 – HORIZONT NACHZIEHEN (nur wenn korrigiert wurde)
+═══════════════════════════════════════════════════════
+
+Wurden in Schritt 1 Prozentwerte geändert, nenne je betroffener Frage in einem Satz
+die dahinterliegende Regel (nicht „Nr. 7 auf 100", sondern z. B. „Beim Löschsand
+reicht ‚löscht Brände' für 100 % – der Metallbrand muss nicht genannt werden"), sag
+was sich im Horizont ändern müsste, und biete an, die Horizonte über Reiter 3 neu zu
+schreiben. Ohne Korrektur diesen Schritt ersatzlos weglassen.
+
+═══════════════════════════════════════════════════════
+DATEN AUS MOODLE
+═══════════════════════════════════════════════════════
+
+„fragen“ – je Frage: Aufgabentext, Maximalpunkte, Erwartungshorizont aus
+„Bewerterinformation“. „antworten“ – je Versuch die Schülerantwort mit „nr“,
+„qubaid“, „slot“.
+
+${DATEN_PLATZHALTER}`;
+  }
+
   function bauePrompt(daten) {
     const eigen = (optionen.promptOverride || '').trim();
-    const vorlage = eigen || bewertungsPromptVorlage();
+    const vorlage = eigen || (optionen.kompaktPrompt ? kompaktPromptVorlage() : bewertungsPromptVorlage());
     const block = '```json\n' + JSON.stringify(daten, null, 1) + '\n```';
     return vorlage.includes(DATEN_PLATZHALTER)
       ? vorlage.replace(DATEN_PLATZHALTER, block)
@@ -1239,6 +1345,16 @@ AUFGABEN OHNE ERWARTUNGSHORIZONT
       nicht nötig. Es entscheidet nur über Fragen <em>ohne</em> Marker: aus (Standard)
       werden sie bewertet und im Ergebnis gemeldet, an bleiben sie liegen. Leg es um,
       wenn dein Bestand vollständig markiert ist.</p>
+      <label class="co-check"><input type="checkbox" class="co-kompakt">
+        Kompakter Prompt (nur für KI mit eigenen Skills, z. B. Claude)</label>
+      <p class="co-hinweis">Verweist für die Bewertungslogik auf die Skills
+      „2-didaktik-bewertung“ und „3-moodle-erweiterungen“ statt sie komplett
+      auszuschreiben – spart pro Aufruf mehrere Tausend Zeichen. <strong>Nur
+      einschalten, wenn du sicher bist, dass die verwendete KI diese Skills wirklich
+      kennt</strong> (z. B. dein eigener Claude-Cowork-Zugang). Andere Lehrkräfte
+      oder andere KI-Systeme lassen dieses Häkchen aus – die bekommen automatisch den
+      vollständigen Prompt. Wirkt nur auf den Bewertungs-Prompt in Reiter 1, nicht
+      auf den Horizont-Prompt in Reiter 3.</p>
       <label class="co-label">KI-Hinweis unter dem Feedback
         <textarea class="co-kitext" rows="3"></textarea>
       </label>
@@ -1325,6 +1441,7 @@ AUFGABEN OHNE ERWARTUNGSHORIZONT
     $('.co-prompt').value = optionen.promptOverride || bewertungsPromptVorlage();
     $('.co-hprompt').value = optionen.horizontPromptOverride || horizontPromptVorlage();
     $('.co-nurmarker').checked = !!optionen.nurMitMarker;
+    $('.co-kompakt').checked = !!optionen.kompaktPrompt;
     abzugInfo(); kiVorschau();
   });
 
@@ -1337,6 +1454,7 @@ AUFGABEN OHNE ERWARTUNGSHORIZONT
     await optionenSpeichern({
       maxSprachabzug: abzugWert(),
       nurMitMarker: $('.co-nurmarker').checked,
+      kompaktPrompt: $('.co-kompakt').checked,
       kiHinweisText: $('.co-kitext').value.trim() || KI_HINWEIS_STANDARD
     });
     $('.co-kitext').value = optionen.kiHinweisText;
@@ -1383,6 +1501,7 @@ AUFGABEN OHNE ERWARTUNGSHORIZONT
     await optionenSpeichern({ ...OPT_STANDARD });
     $('.co-abzug').value = prozentText(OPT_STANDARD.maxSprachabzug);
     $('.co-nurmarker').checked = OPT_STANDARD.nurMitMarker;
+    $('.co-kompakt').checked = OPT_STANDARD.kompaktPrompt;
     $('.co-kitext').value = KI_HINWEIS_STANDARD;
     $('.co-prompt').value = bewertungsPromptVorlage();
     $('.co-hprompt').value = horizontPromptVorlage();

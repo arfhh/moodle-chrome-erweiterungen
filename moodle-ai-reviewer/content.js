@@ -136,7 +136,12 @@
     feedbackSammeln: true,
     // Anteil der erreichbaren Punkte, NICHT eine absolute Punktzahl: 0,50 Punkte
     // hiessen bei einer 1-Punkt-Frage 50 % und bei einer 2-Punkte-Frage 25 %.
-    feedbackSchwelleProzent: 50
+    feedbackSchwelleProzent: 50,
+    // Standardmaessig AUS: der volle Prompt ist die einzige Fassung, die fuer jedes
+    // Sprachmodell (auch ohne eigene Skills) sicher funktioniert. Bewusst pro Lehrkraft
+    // per Haekchen einschaltbar, NICHT als Bedingung im Prompt selbst — ein Modell kann
+    // nicht zuverlaessig pruefen, ob es die Skills wirklich hat.
+    kompaktPrompt: false
   };
   let optionen = { ...OPT_STANDARD };
 
@@ -527,6 +532,11 @@ oder leeren Lücken. Schreibe dafür je Versuch einen kurzen Text.
 - Bei Verwechslungsgefahr ein erklärender Satz dazu, sonst nichts weiter.
 - Bei mehreren Lücken getrennt: „Lücke 1: … · Lücke 2: …"
 - Sprich die Schülerin oder den Schüler direkt an, sachlich und ohne Floskeln.
+- WICHTIG – Anführungszeichen im JSON: Willst du im Text ein Wort hervorheben,
+  benutze dafür EINFACHE Anführungszeichen ('so') oder schreibe es ohne
+  Anführungszeichen. Gerade doppelte Anführungszeichen ("so") NIEMALS in einem
+  JSON-Textfeld verwenden – das ist dasselbe Zeichen wie die JSON-Begrenzung
+  und macht das ganze JSON kaputt. Das ist schon mehrfach passiert.
 
 Gib das Feedback im selben Durchgang wie das Punkte-JSON aus:
 
@@ -544,9 +554,83 @@ Gib „bewertungen" und „kommentare" zusammen in EINEM JSON-Block aus.
 
 `;
 
+  // Kompakte Fassung: setzt voraus, dass die KI die Skills "3-moodle-auswertung"
+  // und "2-didaktik-bewertung" von A. Spielhoff kennt und deren Bewertungslogik
+  // (Skala, Pflichtschritte, Verankerung) anwendet. Das Ausgabeformat (Tabelle,
+  // JSON-Schema) ist NICHT Teil dieser Skills und bleibt deshalb ausgeschrieben.
+  function kompaktPromptVorlage() {
+    return `═══════════════════════════════════════════════════════
+MOODLE AI REVIEWER – NACHBEWERTUNG (KOMPAKTER PROMPT)
+═══════════════════════════════════════════════════════
+
+Falls du Zugriff auf die Skills „3-moodle-auswertung“ und „2-didaktik-bewertung“ von
+A. Spielhoff hast: Wende deren komplette Bewertungslogik an — Begrüßung, die zwei
+Pflichtschritte vor dem Bewerten (Satz um die Lücke lesen, gegen ALLE hinterlegten
+Antworten prüfen und an „bekannte_varianten“ verankern, Verneinungs-Falle beachten,
+zuerst auf reinen Groß-/Kleinschreibfehler prüfen), die 6-Stufen-Skala
+(100/90/75/50/25/0) und die Regel, nie 0,01 % zu vergeben.
+
+Hast du diese Skills NICHT: Bitte um den ausführlichen Prompt (Einstellungen dieser
+Erweiterung → Häkchen „Kompakter Prompt“ ausschalten) statt zu raten — ohne die
+genauen Regeln (besonders die 90-%-Stufe nur bei Lückentyp SAC, und die
+Verneinungs-Falle) sind falsche Bewertungen wahrscheinlich.
+
+Kurzreferenz der Skala, nur zur Orientierung, ersetzt die Skill nicht:
+100 = korrekt oder echtes Synonym · 90 = nur Groß-/Kleinschreibung falsch UND
+Lückentyp SAC (bei SA: 100) · 75 = ein klarer Tippfehler, Wort erkennbar · 50 =
+mehrere Tippfehler, mit Mühe erkennbar · 25 = nur Wortanfang/-stamm erkennbar ·
+0 = falsches Wort, Rateversuch oder aus dem Aufgabensatz abgeschrieben.
+Punkte NICHT selbst ausrechnen, nur Prozentwerte angeben — das rechnet die Erweiterung.
+
+═══════════════════════════════════════════════════════
+SCHRITT 1 – TABELLE ZUR PRÜFUNG
+═══════════════════════════════════════════════════════
+
+Gib zuerst alle Funde aus, nach Frage gruppiert, je Lücke eine Kopfzeile mit Satz
+und vollständiger Lösungsliste, dann eine Tabelle:
+
+| Nr | Antwort des Schülers | % | Begründung |
+|---|---|---|---|
+
+„Nr“ ist die Zahl aus „nr“ im Fund. Keine Punktespalte. Halte danach an und frage:
+„Passt das so? Nenne mir die Nummern, die ich ändern soll, zum Beispiel: 3 auf 50,
+7 auf 0. Wenn alles stimmt, antworte mit ok.“ Warte auf die Antwort.
+
+═══════════════════════════════════════════════════════
+SCHRITT 2 – JSON ZUM EINTRAGEN
+═══════════════════════════════════════════════════════
+
+Erst nach „ok“ ausgeben:
+
+\`\`\`json
+{
+  "bewertungen": [
+    { "frage": "1.1.4-Pistill", "qubaid": "2429453", "slot": "5",
+      "luecken": [ { "nr": 1, "prozent": 75 } ] }
+  ]
+}
+\`\`\`
+
+Ein Eintrag je Versuch (nicht je Lücke), „qubaid“/„slot“ unverändert übernehmen,
+„prozent“ eine der sechs Stufen. Versuche mit 0 % bei allen Lücken weglassen. Keine
+Punktzahlen, kein „neu“, kein „markfeld“. Satz danach: „Kopiere diesen Block in die
+Erweiterung, Reiter „2 · Eintragen“, und klicke dort auf „🔍 Prüfen“.“
+
+[FEEDBACK_BLOCK]
+═══════════════════════════════════════════════════════
+DATEN AUS MOODLE
+═══════════════════════════════════════════════════════
+
+„fragen“ – je Frage: „art“ (cloze/kurzantwort), Aufgabentext mit [[L1]],[[L2]],
+„loesungen“ je Lücke mit Typ (SA/SAC/…), „richtig“-Liste, ggf. „bekannte_varianten“
+mit Prozentwerten. „funde“ – je Versuch die nicht erkannten Lücken mit „kontext“.
+
+${DATEN_PLATZHALTER}`;
+  }
+
   function bauePrompt(daten, mitFeedback) {
     const eigen = (optionen.promptOverride || '').trim();
-    let vorlage = eigen || standardPrompt();
+    let vorlage = eigen || (optionen.kompaktPrompt ? kompaktPromptVorlage() : standardPrompt());
     vorlage = vorlage.replace('[FEEDBACK_BLOCK]', mitFeedback ? FEEDBACK_BLOCK : '');
     const block = '```json\n' + JSON.stringify(daten, null, 1) + '\n```';
     return vorlage.includes(DATEN_PLATZHALTER)
@@ -1098,6 +1182,15 @@ Gib „bewertungen" und „kommentare" zusammen in EINEM JSON-Block aus.
       je Aufgabe. Nur einschalten, wenn du die vorhandenen Varianten wirklich brauchst.
       Wirkt nur bei Lückentext-Aufgaben; Kurzantwort-Fragen haben keinen Quelltext.</p>
 
+      <label class="ce-check"><input type="checkbox" class="ce-kompakt">
+        Kompakter Prompt (nur für KI mit eigenen Skills, z. B. Claude)</label>
+      <p class="ce-hinweis">Verweist für die Bewertungslogik auf die Skills
+      „3-moodle-auswertung“ und „2-didaktik-bewertung“ statt sie komplett auszuschreiben
+      – spart pro Aufruf mehrere Tausend Zeichen. <strong>Nur einschalten, wenn du sicher
+      bist, dass die verwendete KI diese Skills wirklich kennt</strong> (z. B. dein eigener
+      Claude-Cowork-Zugang). Andere Lehrkräfte oder andere KI-Systeme lassen dieses
+      Häkchen aus – die bekommen automatisch den vollständigen Prompt.</p>
+
       <label class="ce-label">Eigener Prompt (leer = Standard)
         <textarea class="ce-prompt" rows="8" placeholder="Leer lassen, um den mitgelieferten Prompt zu verwenden."></textarea>
       </label>
@@ -1157,6 +1250,7 @@ Gib „bewertungen" und „kommentare" zusammen in EINEM JSON-Block aus.
 
   optionenLaden().then(() => {
     $('.ce-voll').checked = !!optionen.vollstaendig;
+    $('.ce-kompakt').checked = !!optionen.kompaktPrompt;
     $('.ce-prompt').value = optionen.promptOverride || '';
     $('.ce-kitext').value = optionen.kiHinweisText || KI_HINWEIS_STANDARD;
     $('.ce-fb').checked = optionen.feedbackSammeln !== false;
@@ -1205,6 +1299,7 @@ Gib „bewertungen" und „kommentare" zusammen in EINEM JSON-Block aus.
   $('.ce-optsave').addEventListener('click', async () => {
     await optionenSpeichern({
       vollstaendig: $('.ce-voll').checked,
+      kompaktPrompt: $('.ce-kompakt').checked,
       promptOverride: $('.ce-prompt').value.trim(),
       kiHinweisText: $('.ce-kitext').value.trim() || KI_HINWEIS_STANDARD
     });
@@ -1223,6 +1318,7 @@ Gib „bewertungen" und „kommentare" zusammen in EINEM JSON-Block aus.
     // der Grundeinstellungen faellt er deshalb mit weg.
     await optionenSpeichern({ ...OPT_STANDARD });
     $('.ce-voll').checked = false;
+    $('.ce-kompakt').checked = false;
     $('.ce-prompt').value = '';
     $('.ce-kitext').value = KI_HINWEIS_STANDARD;
     $('.ce-fb').checked = OPT_STANDARD.feedbackSammeln;
