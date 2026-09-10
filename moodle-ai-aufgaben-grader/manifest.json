@@ -1,0 +1,52 @@
+{
+  "manifest_version": 3,
+  "name": "Moodle AI Aufgaben-Grader",
+  "version": "1.0.0",
+  "description": "Lädt anonymisierte Datei-Abgaben aus dem Aufgaben-Modul als ZIP herunter, erzeugt den passenden KI-Auftrags-Prompt und trägt Note und Feedback aus einer CSV-Datei automatisch in Moodle ein.",
+  "permissions": [
+    "storage"
+  ],
+  "content_scripts": [
+    {
+      "matches": [
+        "*://*/*mod/assign/view.php*"
+      ],
+      "js": [
+        "content.js"
+      ],
+      "css": [
+        "style.css"
+      ],
+      "run_at": "document_idle"
+    }
+  ],
+  "icons": {
+    "16": "icons/icon16.png",
+    "32": "icons/icon32.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  },
+  "action": {
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "32": "icons/icon32.png",
+      "48": "icons/icon48.png",
+      "128": "icons/icon128.png"
+    },
+    "default_title": "Moodle AI Aufgaben-Grader"
+  },
+  "web_accessible_resources": [
+    {
+      "resources": [
+        "icons/icon16.png",
+        "icons/icon32.png",
+        "icons/icon48.png",
+        "icons/icon128.png"
+      ],
+      "matches": [
+        "https://*/*",
+        "http://*/*"
+      ]
+    }
+  ]
+}
