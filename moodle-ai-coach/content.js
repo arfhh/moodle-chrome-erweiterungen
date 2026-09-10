@@ -1,4 +1,4 @@
-/* Moodle AI Coach v1.7.0 — Bewertung kurzer Freitextantworten.
+/* Moodle AI Coach v1.8.0 — Bewertung kurzer Freitextantworten.
  *
  * Arbeitsteilung der drei Erweiterungen (Stand 05.09.2026):
  *   Grader   blau,    top 80px, Einzelfrageseite (slot=)        — EINE Freitextaufgabe mit Teilaufgaben
@@ -192,6 +192,50 @@
     return zeilen.join('\n').trim();
   }
 
+  // ---- Rechtschreibungs-Prozent im Horizont (seit 1.8.0) ----------------------
+  //
+  // Bei mehreren Kursen (8./9./10. Klasse o. ae.) wird leicht vergessen, die
+  // Einstellung vor jeder Bewertung an die richtige Klasse anzupassen. Deshalb
+  // traegt ein selbst erzeugter Horizont den beim Erstellen aktiven Prozentwert
+  // als eigene Meta-Zeile, direkt nach dem Zustaendigkeits-Marker — z. B.
+  // "[Rechtschreibung: 15%]". Reine Verwaltung, wie der Marker: sie fliesst nicht
+  // in den Bewertungsprompt ein.
+  const PROZENT_ZEILE_RE = /^\s*\[?\s*rechtschreibung\s*[:\-]?\s*(\d{1,3}(?:[.,]\d+)?)\s*%?\s*\]?\s*$/i;
+
+  function prozentZeile(wert) {
+    return `[Rechtschreibung: ${prozentText(wert)}%]`;
+  }
+
+  // Liefert den im Horizont hinterlegten Prozentwert, oder null, wenn keiner drin
+  // steht (aeltere Horizonte, oder von Hand geschrieben ohne Meta-Zeile).
+  function prozentAusHorizont(horizontRoh) {
+    const erste = ersteZeile(horizontOhneMarker(horizontRoh));
+    const m = erste.match(PROZENT_ZEILE_RE);
+    return m ? parseFloat(m[1].replace(',', '.')) : null;
+  }
+
+  // Entfernt Marker UND Rechtschreibungs-Meta-Zeile vom Kopf des Horizonts — beide
+  // sind Verwaltung, keine Bewertungsgrundlage, und duerfen nicht in den Prompt.
+  function horizontBereinigt(horizontRoh) {
+    const ohneMarker = horizontOhneMarker(horizontRoh);
+    const zeilen = ohneMarker.split('\n');
+    const i = zeilen.findIndex((z) => z.trim());
+    if (i > -1 && PROZENT_ZEILE_RE.test(zeilen[i].trim())) {
+      zeilen.splice(i, 1);
+    }
+    return zeilen.join('\n').trim();
+  }
+
+  // Setzt die Rechtschreibungs-Meta-Zeile direkt nach der Marker-Zeile, falls dort
+  // noch keine steht. `textMitMarker` hat den Marker garantiert schon als Zeile 1.
+  function fuegeProzentZeileEin(textMitMarker, prozent) {
+    const zeilen = textMitMarker.split('\n');
+    const zweite = (zeilen[1] || '').trim();
+    if (PROZENT_ZEILE_RE.test(zweite)) return textMitMarker;
+    zeilen.splice(1, 0, prozentZeile(prozent));
+    return zeilen.join('\n');
+  }
+
   /* ================= Einstellungen ================= */
 
   const KI_HINWEIS_STANDARD =
@@ -210,6 +254,16 @@
     nurMitMarker: false
   };
   let optionen = { ...OPT_STANDARD };
+  // Gilt nur fuer den aktuellen Ernte-Durchlauf, wird nie gespeichert: erzwingt die
+  // eingestellte Prozentzahl statt der im Horizont hinterlegten (Abgleich, 1.8.0).
+  let prozentEinstellungErzwingen = false;
+
+  function hoechstabzugFuer(frageDaten) {
+    const standard = optionen.maxSprachabzug ?? OPT_STANDARD.maxSprachabzug;
+    if (prozentEinstellungErzwingen) return standard;
+    const h = frageDaten && frageDaten.horizontProzent;
+    return (h === null || h === undefined) ? standard : h;
+  }
 
   function optionenLaden() {
     return new Promise((resolve) => {
@@ -236,9 +290,10 @@
   // die Bewertung sagt nichts mehr aus.
   const LEITER = [0, 1 / 3, 1 / 2, 2 / 3, 5 / 6, 1];
 
-  function abzugProzent(fehlerzahl) {
+  function abzugProzent(fehlerzahl, hoechstabzugOverride) {
     const i = Math.min(Math.max(0, Math.round(fehlerzahl)), LEITER.length - 1);
-    return LEITER[i] * (optionen.maxSprachabzug ?? OPT_STANDARD.maxSprachabzug);
+    const basis = hoechstabzugOverride ?? (optionen.maxSprachabzug ?? OPT_STANDARD.maxSprachabzug);
+    return LEITER[i] * basis;
   }
 
   // Schwere Fehler zählen doppelt — ein Satz ohne Prädikat wiegt mehr als ein
@@ -246,9 +301,9 @@
   const fehlerGewicht = (liste) =>
     (liste || []).reduce((s, f) => s + (f && f.schwer ? 2 : 1), 0);
 
-  function punkteRechnen(max, inhaltProzent, fehlerListe) {
+  function punkteRechnen(max, inhaltProzent, fehlerListe, hoechstabzugOverride) {
     const gewicht = fehlerGewicht(fehlerListe);
-    const ab = abzugProzent(gewicht);
+    const ab = abzugProzent(gewicht, hoechstabzugOverride);
     const roh = max * inhaltProzent / 100 - max * ab / 100;
     return {
       gewicht, abzug: ab,
@@ -310,7 +365,8 @@
       name: zeile.name, qid: zeile.qid, slot: zeile.slot,
       aufgabe: txt(erste.querySelector('.qtext')),
       zustaendig: zustaendigkeit(horizontRoh),
-      horizont: horizontOhneMarker(horizontRoh),
+      horizontProzent: prozentAusHorizont(horizontRoh),
+      horizont: horizontBereinigt(horizontRoh),
       max: num((erste.querySelector('input[name$="-maxmark"]') || {}).value) ?? 1,
       ...(nachgeladen ? { horizont_aus_fassung: nachgeladen } : {})
     };
@@ -596,19 +652,23 @@
   // vom Coach erzeugte Horizont ihn automatisch.
   function horizontSchreiben(qid, text, nurPruefen) {
     const mitMarker = MARKER_RE.test(ersteZeile(text)) ? text : MARKER_ZEILE + '\n' + text;
+    const mitProzent = fuegeProzentZeileEin(
+      mitMarker, optionen.maxSprachabzug ?? OPT_STANDARD.maxSprachabzug);
     return graderinfoSchreiben(
       qid,
-      () => '<p>' + escapeHtml(mitMarker).replace(/\n/g, '<br>') + '</p>',
-      mitMarker, nurPruefen);
+      () => '<p>' + escapeHtml(mitProzent).replace(/\n/g, '<br>') + '</p>',
+      mitProzent, nurPruefen);
   }
 
-  // Stellt nur die Markerzeile vor einen VORHANDENEN Horizont. Der bisherige Inhalt
-  // wird unveraendert uebernommen — er ist HTML, und ihn ueber den Textweg neu zu
-  // schreiben wuerde Absaetze und Listen zerstoeren.
+  // Stellt Marker- UND Rechtschreibungs-Zeile vor einen VORHANDENEN Horizont. Der
+  // bisherige Inhalt wird unveraendert uebernommen — er ist HTML, und ihn ueber den
+  // Textweg neu zu schreiben wuerde Absaetze und Listen zerstoeren.
   function markerNachtragen(qid) {
+    const kopf = '<p>' + MARKER_ZEILE + '</p><p>'
+      + prozentZeile(optionen.maxSprachabzug ?? OPT_STANDARD.maxSprachabzug) + '</p>';
     return graderinfoSchreiben(
       qid,
-      (vorher) => '<p>' + MARKER_ZEILE + '</p>' + (vorher || ''),
+      (vorher) => kopf + (vorher || ''),
       MARKER_ZEILE, false);
   }
 
@@ -1082,6 +1142,7 @@ AUFGABEN OHNE ERWARTUNGSHORIZONT
       <div class="co-result co-hidden">
         <p class="co-summary"></p>
         <p class="co-warn co-hidden"></p>
+        <div class="co-prozentbox co-hidden"></div>
         <div class="co-zust co-hidden"></div>
         <button class="co-copy">📋 Prompt + Daten kopieren</button>
         <button class="co-copy2 co-zweit">📋 nur JSON</button>
@@ -1369,6 +1430,38 @@ AUFGABEN OHNE ERWARTUNGSHORIZONT
           + 'Sie sind im Prompt nicht enthalten — leg ihn in Reiter 3 an.';
       } else warn.classList.add('co-hidden');
 
+      /* ---- Rechtschreibungs-Prozent: Horizont gegen Einstellung (seit 1.8.0) ---- */
+      // Eigene Funktion, nicht nur Inline-Code: der Umschalt-Knopf ruft sie erneut
+      // auf, ohne die Fragen ein zweites Mal von Moodle zu laden.
+      function zeichnenProzentbox() {
+        const prozentBox = $('.co-prozentbox'); prozentBox.innerHTML = '';
+        const aktuellerProzent = optionen.maxSprachabzug ?? OPT_STANDARD.maxSprachabzug;
+        const prozentAbweichend = Object.values(ausgabe.fragen)
+          .filter((f) => f.horizont && f.horizontProzent != null && f.horizontProzent !== aktuellerProzent);
+        if (!prozentAbweichend.length) { prozentBox.classList.add('co-hidden'); return; }
+        prozentBox.classList.remove('co-hidden');
+        prozentBox.appendChild(el('div', 'co-zustkopf',
+          `⚠ ${prozentAbweichend.length} Frage(n) tragen im Horizont eine andere `
+          + `Rechtschreibungs-Prozentzahl als aktuell eingestellt (${prozentText(aktuellerProzent)} %):`));
+        prozentAbweichend.forEach((f) => prozentBox.appendChild(el('div', 'co-logzeile',
+          `${f.name} — Horizont: ${prozentText(f.horizontProzent)} %`)));
+        prozentBox.appendChild(el('div', 'co-hinweis',
+          prozentEinstellungErzwingen
+            ? `Es gilt gerade überall die eingestellte Prozentzahl (${prozentText(aktuellerProzent)} %).`
+            : 'Es gilt gerade je Frage der Wert aus dem Horizont — so, wie beim Erstellen des '
+              + 'Erwartungshorizonts bewusst festgelegt.'));
+        const umschalten = el('button', 'co-marker co-zweit',
+          prozentEinstellungErzwingen
+            ? 'Stattdessen die Horizont-Werte verwenden'
+            : `Stattdessen überall ${prozentText(aktuellerProzent)} % verwenden`);
+        umschalten.addEventListener('click', () => {
+          prozentEinstellungErzwingen = !prozentEinstellungErzwingen;
+          zeichnenProzentbox();
+        });
+        prozentBox.appendChild(umschalten);
+      }
+      zeichnenProzentbox();
+
       /* ---- Zuständigkeit: was gehört wem, und was ist zu tun ---- */
       const zustBox = $('.co-zust'); zustBox.innerHTML = '';
       const ohneMarker = Object.values(ausgabe.fragen).filter((f) => f.horizont && !f.zustaendig);
@@ -1568,13 +1661,13 @@ AUFGABEN OHNE ERWARTUNGSHORIZONT
         if (isNaN(inhalt) || inhalt < 0 || inhalt > 100) {
           throw new Error(`Eintrag ${nr}: „inhalt" ist kein Prozentwert (${e.inhalt}).`);
         }
-        const r = punkteRechnen(a.max, inhalt, e.fehler);
-        // Neue Form: gegliederte Rueckmeldung, aus der das Plugin das HTML baut.
-        // Alte Form („text" als fertiger Satz) bleibt gueltig, damit gespeicherte
-        // eigene Prompts weiter funktionieren.
         // Musterloesung nur, wenn inhaltlich etwas fehlte — bei voller Punktzahl waere
         // sie eine Belehrung fuer eine richtige Antwort.
         const frageDaten = (ausgabe.fragen && ausgabe.fragen[a.frage]) || {};
+        const r = punkteRechnen(a.max, inhalt, e.fehler, hoechstabzugFuer(frageDaten));
+        // Neue Form: gegliederte Rueckmeldung, aus der das Plugin das HTML baut.
+        // Alte Form („text" als fertiger Satz) bleibt gueltig, damit gespeicherte
+        // eigene Prompts weiter funktionieren.
         const muster = inhalt < 100 ? kernaussage(frageDaten.horizont) : '';
         const rmText = rueckmeldungHtml(e.rueckmeldung, muster, { inhalt: r.inhaltPunkte, abzug: r.abzugPunkte }) || String(e.text || '').trim();
         raus.push({

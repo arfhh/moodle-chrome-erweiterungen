@@ -3,7 +3,7 @@
 Bewertet **kurze Freitextantworten** (ein bis drei Sätze) in Moodles Manueller
 Bewertung — Punkte **und** Sprachfeedback.
 
-Version 1.7.0 · vierte Erweiterung neben *Moodle AI Grader*, *Moodle AI Reviewer* und
+Version 1.8.0 · vierte Erweiterung neben *Moodle AI Grader*, *Moodle AI Reviewer* und
 *Notenstufen Autofill* · Lizenz: CC BY-SA 4.0 · A. Spielhoff
 
 ---
@@ -194,6 +194,20 @@ Am 28.08.2026 lesend am Hamburg-LMS verifiziert:
 
 Ein Trockenlauf mit genau dieser Logik ergab an einer echten Frage: 36 Felder,
 `sesskey` dabei, `cancel` nicht dabei, keine `undefined`-Werte, POST ≈ 3,9 KB.
+
+## Stand 1.8.0
+
+**1.8.0** — **Rechtschreibungs-Prozent steht jetzt im Horizont und wird abgeglichen.**
+  Bei mehreren Kursen (z. B. Klasse 8, 9, 10) wurde leicht vergessen, den
+  Höchstabzug vor jeder Bewertung an die richtige Klasse anzupassen. Ein selbst
+  erzeugter Horizont trägt den beim Erstellen aktiven Prozentwert jetzt als eigene
+  Meta-Zeile (`[Rechtschreibung: 15%]`, direkt nach dem Zuständigkeits-Marker) — reine
+  Verwaltung, sie geht nicht in den Bewertungsprompt. Weicht der Wert im Horizont beim
+  Bewerten von der aktuellen Einstellung ab, zeigt Reiter 1 die betroffenen Fragen und
+  einen Umschalter „Stattdessen überall X % verwenden". Ohne Umschalten gilt je Frage
+  der Wert aus dem Horizont — der bewusst beim Anlegen des Erwartungshorizonts gewählt
+  wurde. Die vier alten Strenge-Voreinstellungen gab es beim Coach ohnehin nie — nur
+  der Prozentwert war je einstellbar.
 
 ## Stand 1.6.0
 

@@ -1,6 +1,6 @@
 # Moodle AI Grader
 
-**Version 3.0.1** · Chrome-Erweiterung (Manifest V3)
+**Version 3.1.0** · Chrome-Erweiterung (Manifest V3)
 Entwickelt von **T. Henken & A. Spielhoff** · Lizenz **CC BY-SA 4.0**
 
 Bewertet Klausuren mit mehreren Aufgaben in **einer** Moodle-Freitextfrage: legt den
@@ -95,16 +95,16 @@ Punkte, Rundung und Summe rechnet die Erweiterung.
 geschriebener Text bekäme sonst allein für die Form Punkte. Der Höchstabzug ist ein
 Prozentsatz der **Gesamtpunktzahl**, nicht je Aufgabe, und wird proportional verteilt.
 
-Gestaffelt wird nach **Fehlern je 100 Wörtern**:
+Gestaffelt wird nach **Fehlern je 100 Wörtern**, mit einer festen Kurve (seit 3.1.0,
+nicht mehr wählbar — die früheren Stufen mild/normal/streng waren nur eine
+Kalibrierungs-Reserve ohne eigene didaktische Bedeutung):
 
-| Strenge | kein Abzug | ⅓ | ⅔ | voll |
-|---|---|---|---|---|
-| mild | bis 1,5 | bis 3,0 | bis 5,0 | darüber |
-| normal | bis 1,0 | bis 2,0 | bis 3,5 | darüber |
-| streng | bis 0,5 | bis 1,5 | bis 2,5 | darüber |
+| kein Abzug | ⅓ | ⅔ | voll |
+|---|---|---|---|
+| bis 1,0 | bis 2,0 | bis 3,5 | darüber |
 
 Unter 40 Wörtern greift eine Dichte nicht — dort zählt die absolute Fehlerzahl.
-Bei „keine" wird kein Punkt abgezogen, das Sprachfeedback aber trotzdem geschrieben.
+Bei 0 % wird kein Punkt abgezogen, das Sprachfeedback aber trotzdem geschrieben.
 Schwere Fehler (Satz ohne Prädikat, abgebrochener Satz, Satzbau zum zweimal Lesen)
 zählen doppelt.
 
@@ -119,13 +119,23 @@ steht die Operatorverfehlung im laufenden Begründungstext.
 ## Einstellungen (⚙)
 
 Fach · Jahrgang (ab 11 wird gesiezt) · Kursniveau · Punkteschritte ·
-Rechtschreibung (Höchstabzug in % und Strenge) · Feedbacklänge ·
+Rechtschreibung (Höchstabzug in % der Gesamtpunktzahl) · Feedbacklänge ·
 KI-Transparenzhinweis · Quellenangaben entfernen.
 
 Die Werte werden **nicht** nur in den Prompt geschrieben, sondern von der Erweiterung
 angewandt. Wer den Prompt selbst anpassen will, kann ihn über ✏️ überschreiben;
 beim Speichern der Grundeinstellungen werden eigene Prompts zurückgesetzt, damit keine
 veralteten Parameter eingebettet bleiben.
+
+**Seit 3.1.0 stehen Rechtschreibungs-Prozent und Punkteschritte zusätzlich im
+Erwartungshorizont selbst** (Meta-Zeilen direkt nach dem Zuständigkeits-Marker, reine
+Verwaltung — sie gehen nicht in den Prompt). Grund: Bei mehreren Kursen (z. B. Klasse 8,
+9, 10) wird sonst leicht vergessen, die Einstellung vor jeder Korrektur an die richtige
+Klasse anzupassen. Weicht der Rechtschreibungs-Prozentwert im Horizont von der aktuellen
+Einstellung ab, zeigt Reiter „Korrektur" nach „🔍 Prüfen" einen Hinweis mit Umschalter —
+ohne Umschalten gilt der Horizont-Wert, weil er beim Anlegen des Erwartungshorizonts
+bewusst so gewählt wurde. Die Punkteschritte kommen ohne eigenen Abgleich-Dialog direkt
+aus dem Horizont, weil sie die Note ohnehin kaum verändern.
 
 ---
 
@@ -154,6 +164,15 @@ Erweiterung ablegen — im Reiter „Erwartungshorizont" ganz unten.
 - Daten verlassen den Browser erst, wenn du selbst auf „Prompt kopieren" klickst.
 - Kein Zugriff auf Seiten-JavaScript, kein Hintergrunddienst, keine Netzwerkrechte
   außerhalb deines Moodle.
+
+## Änderungen
+
+**3.1.0** — Rechtschreibungs-Prozent und Punkteschritte stehen jetzt als Meta-Zeilen im
+Erwartungshorizont und werden beim Bewerten mit der aktuellen Einstellung abgeglichen
+(Rechtschreibung) bzw. direkt daraus übernommen (Punkteschritte) — Details siehe
+„Einstellungen" oben. Die Strenge-Voreinstellung (keine/mild/normal/streng) ist
+entfallen; die Rechtschreibungs-Kurve ist jetzt fest kalibriert, einzige Einstellung
+bleibt der Prozentwert.
 
 ## Grenzen
 

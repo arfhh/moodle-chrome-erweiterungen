@@ -1,4 +1,4 @@
-/* Moodle AI Grader v3 — content.js
+/* Moodle AI Grader v3.1.0 — content.js
  *
  * Wirkt auf zwei Seiten:
  *   A) Bewertungsseite   mod/quiz/report.php               → Reiter Korrektur + Horizont
@@ -56,6 +56,43 @@
   const MARKER_RE   = /^\s*[\[(]?\s*moodle[-\s]?ai[-\s]?(coach|grader)\s*[\])]?\s*[:.–-]?\s*/i;
   const MARKER_ZEILE = '[moodle-ai-grader]';
 
+  // Meta-Zeilen direkt nach dem Marker (seit 3.1.0): Rechtschreibungs-Prozent und
+  // Punkteschritte, wie sie beim Erzeugen des Horizonts eingestellt waren. Reine
+  // Verwaltung wie der Marker — fliessen nie in einen Prompt ein. Grund: Bei mehreren
+  // Kursen (8./9./10. Klasse) wird sonst leicht vergessen, die Einstellung vor jeder
+  // Korrektur an die richtige Klasse anzupassen.
+  const RS_ZEILE_RE = /rechtschreibung\s*[:\-]?\s*(\d{1,3}(?:[.,]\d+)?)\s*%/i;
+  const SCHRITTE_ZEILE_RE = /punkteschritte\s*[:\-]?\s*([\d.,]+)/i;
+
+  function metaZeilen(prozent, punkteschritte) {
+    return '<p>[Rechtschreibung: ' + komma(prozent) + '%]</p>'
+         + '<p>[Punkteschritte: ' + komma(punkteschritte) + ']</p>';
+  }
+
+  // Die Meta-Zeilen stehen ganz oben im Horizont, vor der ersten "Aufgabe N"-Zeile.
+  // Danach wird nicht mehr gesucht — Inhalt koennte zufaellig aehnlich aussehen.
+  function metaKopf(horizontRoh) {
+    const zeilen = htmlZuText(horizontRoh).split('\n').map(z => z.trim());
+    const kopf = [];
+    for (const z of zeilen) {
+      if (!z) continue;
+      if (AUFGABE_RE.test(z)) break;
+      kopf.push(z);
+      if (kopf.length >= 6) break;
+    }
+    return kopf.join('\n');
+  }
+
+  function rechtschreibungAusHorizont(horizontRoh) {
+    const m = metaKopf(horizontRoh).match(RS_ZEILE_RE);
+    return m ? parseFloat(m[1].replace(',', '.')) : null;
+  }
+
+  function punkteschritteAusHorizont(horizontRoh) {
+    const m = metaKopf(horizontRoh).match(SCHRITTE_ZEILE_RE);
+    return m ? zahl(m[1]) : null;
+  }
+
   // Eine Aufgabengrenze — in der Horizont-Ueberschrift wie in der Kopfzeile der
   // Antwortvorlage. Die eingekreiste Ziffer davor ist optional.
   const AUFGABE_RE = /^\s*[①-⑳⓪]?\s*Aufgabe\s+(\d+)\b/i;
@@ -69,14 +106,14 @@
     'neutral': { kopf: '#eceff3', feld: '#f8f9fb' }
   };
 
-  // Rechtschreibabzug: Stufen nach Fehlern je 100 Woertern.
-  // Anteil vom Hoechstabzug. Unter MINDESTWOERTER greift die Dichte nicht — dort
-  // wird nach absoluter Fehlerzahl gestaffelt (wie im Coach).
-  const RS_STUFEN = {
-    mild:   [ [1.5, 0], [3.0, 1/3], [5.0, 2/3], [Infinity, 1] ],
-    normal: [ [1.0, 0], [2.0, 1/3], [3.5, 2/3], [Infinity, 1] ],
-    streng: [ [0.5, 0], [1.5, 1/3], [2.5, 2/3], [Infinity, 1] ]
-  };
+  // Rechtschreibabzug: Stufen nach Fehlern je 100 Woertern. Anteil vom Hoechstabzug.
+  // Seit 3.1.0 fest im Code statt als Voreinstellung waehlbar (keine/mild/normal/streng
+  // entfielen) — die drei Stufen waren nur eine Kalibrierungs-Reserve ohne eigenstaendige
+  // didaktische Bedeutung, und mehr Prozent wirkt ueber den Hoechstabzug ohnehin schon
+  // 'strenger'. Einzige verbleibende Einstellung ist der Prozentwert (`rechtschreibung`).
+  // Unter MINDESTWOERTER greift die Dichte nicht — dort wird nach absoluter Fehlerzahl
+  // gestaffelt (wie im Coach).
+  const RS_LEITER = [ [1.0, 0], [2.0, 1/3], [3.5, 2/3], [Infinity, 1] ];
   const RS_ABSOLUT   = [0, 1/3, 1/2, 2/3, 5/6, 1]; // 0,1,2,3,4,5+ Fehler
   const MINDESTWOERTER = 40;
 
@@ -86,7 +123,6 @@
     kursniveau:      'G',
     punkteschritte:  '0.5',
     rechtschreibung: '10',      // Prozent der Gesamtpunktzahl, 0 = kein Abzug
-    rsStrenge:       'normal',  // keine | mild | normal | streng
     feedbacklaenge:  'Ausführlich',
     afbFarben:       false,     // Antwortvorlage in AFB-Farblogik statt neutral
     vorlagePunkte:   true,
@@ -99,6 +135,9 @@
   };
 
   let E = JSON.parse(JSON.stringify(STANDARD));   // aktive Einstellungen
+  // Gilt nur fuer den aktuellen Korrektur-Durchlauf, wird nie gespeichert: erzwingt die
+  // eingestellte Rechtschreibungs-Prozentzahl statt der im Horizont hinterlegten (3.1.0).
+  let rsEinstellungErzwingen = false;
 
   /* ═══════════════════════════════════════════════════════════════════
      3 · KLEINE HELFER
@@ -124,9 +163,10 @@
   function komma(z) { return String(z).replace('.', ','); }
   function zahl(s)  { return parseFloat(String(s == null ? '' : s).replace(',', '.')); }
 
-  // Auf die eingestellten Punkteschritte runden, nie ueber max.
-  function rundePunkte(wert, max) {
-    const schritt = parseFloat(E.punkteschritte) || 0.5;
+  // Auf die eingestellten (oder aus dem Horizont uebernommenen) Punkteschritte runden,
+  // nie ueber max.
+  function rundePunkte(wert, max, schrittOverride) {
+    const schritt = schrittOverride || parseFloat(E.punkteschritte) || 0.5;
     let p = Math.round(wert / schritt) * schritt;
     p = Math.max(0, Math.min(p, max));
     return Math.round(p * 100) / 100;
@@ -141,13 +181,24 @@
   }
 
   function ohneMarker(text) {
-    const z = ersteZeile(text);
+    let t = String(text || '');
+    const z = ersteZeile(t);
     if (MARKER_RE.test(z)) {
-      return String(text).replace(z, z.replace(MARKER_RE, '')).replace(/^\s*\n/, '');
+      t = t.replace(z, z.replace(MARKER_RE, '')).replace(/^\s*\n/, '');
+    } else {
+      // Steht der Marker als eigene Zeile irgendwo am Anfang, ebenfalls entfernen.
+      t = t.replace(
+        /^\s*[\[(]?\s*moodle[-\s]?ai[-\s]?(coach|grader)\s*[\])]?\s*[:.–-]?\s*$/im, '').replace(/^\s*\n+/, '');
     }
-    // Steht der Marker als eigene Zeile irgendwo am Anfang, ebenfalls entfernen.
-    return String(text || '').replace(
-      /^\s*[\[(]?\s*moodle[-\s]?ai[-\s]?(coach|grader)\s*[\])]?\s*[:.–-]?\s*$/im, '').replace(/^\s*\n+/, '');
+    // Rechtschreibungs- und Punkteschritte-Meta-Zeilen ebenfalls entfernen (3.1.0) — sie
+    // sind Verwaltung, kein Bewertungsmassstab, egal ob als eigene <p>-Zeile oder Text.
+    for (let i = 0; i < 2; i++) {
+      const zz = ersteZeile(t);
+      if (zz && (RS_ZEILE_RE.test(zz) || SCHRITTE_ZEILE_RE.test(zz))) {
+        t = t.replace(zz, '').replace(/^\s*\n/, '');
+      } else break;
+    }
+    return t;
   }
 
   function quellenWeg(text) {
@@ -480,14 +531,12 @@
   // Anteil vom Hoechstabzug. Unter MINDESTWOERTER greift die Dichte nicht —
   // dort nach absoluter Fehlerzahl staffeln, wie im Coach.
   function rsAnteil(fehlerGewichtet, wortzahl) {
-    if (E.rsStrenge === 'keine') return 0;
     if (wortzahl < MINDESTWOERTER) {
       const i = Math.min(Math.round(fehlerGewichtet), RS_ABSOLUT.length - 1);
       return RS_ABSOLUT[i];
     }
     const dichte = wortzahl > 0 ? (fehlerGewichtet * 100) / wortzahl : 0;
-    const leiter = RS_STUFEN[E.rsStrenge] || RS_STUFEN.normal;
-    for (const [grenze, anteil] of leiter) if (dichte <= grenze) return anteil;
+    for (const [grenze, anteil] of RS_LEITER) if (dichte <= grenze) return anteil;
     return 1;
   }
 
@@ -499,7 +548,10 @@
   /* Rechnet eine Abgabe durch.
      bewertung = { aufgaben: [{nr, prozent}], fehler: [{wort, korrektur, kategorie, schwer}] }
      horizont  = Bloecke aus zerlegeHorizont(), fuer die Punkteverteilung             */
-  function rechneAbgabe(abgabe, bewertung, horizontBloecke) {
+  // rsProzentOverride/schrittOverride: der aus dem Horizont gelesene Wert (siehe
+  // korrekturPruefen) hat Vorrang vor der Einstellung — es sei denn, die Lehrkraft hat
+  // ausdruecklich "Einstellung erzwingen" angeklickt. null/undefined heisst: Einstellung.
+  function rechneAbgabe(abgabe, bewertung, horizontBloecke, rsProzentOverride, schrittOverride) {
     const gesamtMax = abgabe.max || leseGesamtpunkte() || 0;
 
     // Punkte je Aufgabe: Verteilung aus dem Horizont, sonst gleichmaessig.
@@ -533,7 +585,7 @@
     const inhalt = teil.reduce((s, t) => s + t.roh, 0);
 
     // Rechtschreibabzug: Prozentsatz der GESAMTpunktzahl, nicht je Aufgabe.
-    const rsProzent = parseFloat(E.rechtschreibung) || 0;
+    const rsProzent = (rsProzentOverride != null) ? rsProzentOverride : (parseFloat(E.rechtschreibung) || 0);
     const hoechstabzug = (gesamtMax * rsProzent) / 100;
     const gew = fehlerGewicht(bewertung.fehler);
     const wz = woerter(abgabe.text);
@@ -550,11 +602,11 @@
     // Gerundet wird die GESAMTpunktzahl — nur sie traegt Moodle ein. Wuerde jede
     // Teilaufgabe einzeln gerundet, verschwaende ein kleiner Rechtschreibabzug
     // spurlos und die Summe kletterte nach oben.
-    const summe = rundePunkte(teil.reduce((s, t) => s + t.netto, 0), gesamtMax);
+    const schritt = schrittOverride || parseFloat(E.punkteschritte) || 0.5;
+    const summe = rundePunkte(teil.reduce((s, t) => s + t.netto, 0), gesamtMax, schritt);
 
     // Die Teilpunkte fuers Feedback so runden, dass ihre Summe die Gesamtpunktzahl
     // wirklich ergibt (groesste Reste zuerst) — sonst widerspricht sich das Feedback.
-    const schritt = parseFloat(E.punkteschritte) || 0.5;
     teil.forEach(t => {
       t.punkte = Math.max(0, Math.floor(t.netto / schritt + 1e-9) * schritt);
       t.rest = t.netto - t.punkte;
@@ -635,7 +687,8 @@
     // ob der Coach die Frage anfasst. Hat die KI ihn (etwa aus einem eigenen Prompt)
     // trotzdem in den ersten Block geschrieben, nicht doppelt setzen — wie im Coach.
     const schonDa = (aufgaben || []).some(a => MARKER_RE.test(ersteZeile(htmlZuText(a.horizont))));
-    const kopf = schonDa ? '' : '<p>' + MARKER_ZEILE + '</p>';
+    const kopf = schonDa ? ''
+      : '<p>' + MARKER_ZEILE + '</p>' + metaZeilen(E.rechtschreibung, E.punkteschritte);
     const bloecke = (aufgaben || []).map(a => {
       let inhalt = String(a.horizont || '').trim();
       if (!/<[a-z][\s\S]*>/i.test(inhalt)) {
@@ -1120,6 +1173,7 @@ Liefere für JEDE Abgabe des Blocks einen Eintrag, auch für leere Abgaben
       <label>2 · Antworten der KI einfügen</label>
       <textarea data-rolle="kjson" rows="5" placeholder='{ "bewertungen": [ … ] }'></textarea>
       <button class="mag-btn mag-btn-primary" data-tu="kpruefen">🔍 Prüfen</button>
+      <div class="mag-hinweis" data-rolle="rsabgleich" hidden></div>
       <div class="mag-liste" data-rolle="kliste"></div>
       <div class="mag-protokoll" data-rolle="klog" hidden></div>
       <div class="mag-reihe" data-rolle="keintragen" hidden>
@@ -1153,13 +1207,6 @@ Liefere für JEDE Abgabe des Blocks einen Eintrag, auch für leere Abgaben
         <option value="10">10 % (Standard Mittelstufe)</option><option value="15">15 %</option>
         <option value="20">20 %</option><option value="25">25 % (Oberstufe, Klausuren)</option>
         <option value="30">30 %</option>
-      </select>
-      <label>Rechtschreibung: Strenge der Stufen</label>
-      <select data-opt="rsStrenge">
-        <option value="keine">keine — nur Feedback, kein Abzug</option>
-        <option value="mild">mild</option>
-        <option value="normal">normal (Standard)</option>
-        <option value="streng">streng</option>
       </select>
       <div class="mag-hinweis" data-rolle="rshinweis"></div>
       <label>Feedbacklänge</label>
@@ -1261,9 +1308,9 @@ Liefere für JEDE Abgabe des Blocks einen Eintrag, auch für leere Abgaben
   }
   // Kurzfassung der Einstellungen fuer die Zeile ueber den Kopierknoepfen.
   function einstellungenZeile() {
-    const rs = (E.rsStrenge === 'keine' || parseFloat(E.rechtschreibung) === 0)
+    const rs = (parseFloat(E.rechtschreibung) === 0)
       ? 'Rechtschreibung: kein Abzug'
-      : 'Rechtschreibung: ' + E.rechtschreibung + ' % (' + E.rsStrenge + ')';
+      : 'Rechtschreibung: ' + E.rechtschreibung + ' %';
     return [
       (E.fach || '⚠ Fach fehlt'),
       'Jahrgang ' + (E.jahrgang || '⚠ fehlt'),
@@ -1295,11 +1342,10 @@ Liefere für JEDE Abgabe des Blocks einen Eintrag, auch für leere Abgaben
     if (a) a.textContent = 'Im Feedback wird „' + anrede() + ' …" verwendet.';
     const rs = R('rshinweis');
     if (rs) {
-      if (E.rsStrenge === 'keine' || parseFloat(E.rechtschreibung) === 0) {
+      if (parseFloat(E.rechtschreibung) === 0) {
         rs.textContent = 'Kein Punktabzug — das Sprachfeedback wird trotzdem geschrieben.';
       } else {
-        const l = RS_STUFEN[E.rsStrenge] || RS_STUFEN.normal;
-        rs.textContent = 'Voller Abzug ab ' + komma(l[2][0]) + ' Fehlern je 100 Wörtern; '
+        rs.textContent = 'Voller Abzug ab ' + komma(RS_LEITER[2][0]) + ' Fehlern je 100 Wörtern; '
           + 'unter ' + MINDESTWOERTER + ' Wörtern zählt die absolute Fehlerzahl.';
       }
     }
@@ -1522,14 +1568,48 @@ Liefere für JEDE Abgabe des Blocks einen Eintrag, auch für leere Abgaben
       const { fehlend, doppelt } = pruefeVollstaendig(liste, abgaben.map(a => a.nr));
       if (doppelt.length) throw new Error('Abgabe ' + doppelt.join(', ') + ' kommt doppelt vor.');
 
-      eintragungen = [];
+      // Rechtschreibungs-Prozent: Horizont gegen Einstellung abgleichen (seit 3.1.0).
+      // Ohne "erzwingen" hat der Horizont-Wert Vorrang — er wurde beim Anlegen des
+      // Erwartungshorizonts bewusst so gewaehlt. Punkteschritte kommen ohne Abgleich
+      // direkt aus dem Horizont (wirken sich auf die Note kaum aus).
+      const aktuellerRs = parseFloat(E.rechtschreibung) || 0;
+      const rsHorizont = rechtschreibungAusHorizont(horizont);
+      const schritteHorizont = punkteschritteAusHorizont(horizont);
+      const effRs = (rsHorizont != null && !rsEinstellungErzwingen) ? rsHorizont : aktuellerRs;
+      const effSchritt = schritteHorizont != null ? schritteHorizont : (parseFloat(E.punkteschritte) || 0.5);
+
       const box = R('kliste'); box.innerHTML = '';
+      const abgleich = R('rsabgleich');
+      if (abgleich) {
+        abgleich.innerHTML = '';
+        if (rsHorizont != null && rsHorizont !== aktuellerRs) {
+          abgleich.hidden = false;
+          abgleich.appendChild(el('div', null,
+            '⚠ Im Horizont steht ' + komma(rsHorizont) + ' % Rechtschreibung, eingestellt sind '
+            + komma(aktuellerRs) + ' %. Es gilt gerade: '
+            + (rsEinstellungErzwingen ? komma(aktuellerRs) + ' % (Einstellung)'
+                                       : komma(rsHorizont) + ' % (Horizont)') + '.'));
+          const umschalten = el('button', 'mag-btn mag-btn-grau',
+            rsEinstellungErzwingen
+              ? 'Stattdessen den Horizont-Wert verwenden'
+              : 'Stattdessen ' + komma(aktuellerRs) + ' % (Einstellung) verwenden');
+          umschalten.addEventListener('click', () => {
+            rsEinstellungErzwingen = !rsEinstellungErzwingen;
+            korrekturPruefen();
+          });
+          abgleich.appendChild(umschalten);
+        } else {
+          abgleich.hidden = true;
+        }
+      }
+
+      eintragungen = [];
       let ohneAenderung = 0;
 
       liste.forEach(b => {
         const abgabe = abgaben.find(a => a.nr === Number(b.nr));
         if (!abgabe) return;
-        const rechnung = rechneAbgabe(abgabe, b, bloecke);
+        const rechnung = rechneAbgabe(abgabe, b, bloecke, effRs, effSchritt);
         const text = baueFeedback(b, rechnung, bloecke);
         if (Math.abs(rechnung.gesamt - abgabe.ist) < 0.005 && !abgabe.kommentarfeld) {
           ohneAenderung++; return;
