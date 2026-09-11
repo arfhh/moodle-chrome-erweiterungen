@@ -1,5 +1,5 @@
 /* Moodle AI Aufgaben-Grader — Panel-Styling
-   Eigene Panel-Position (top 80px), eigene Farbe (Amber #d97706), damit sich
+   Eigene Panel-Position (top 80px), eigene Farbe (Rot #d3070f, exakt der Ton aus icon128.png), damit sich
    die Erweiterung nicht mit MAG/Reviewer/Coach überlagert — sie wirkt ohnehin
    auf einer anderen Seite (mod/assign statt mod/quiz). */
 
@@ -11,7 +11,7 @@
   width: 400px;
   max-width: calc(100vw - 32px);
   background: #fff;
-  border: 2px solid #d97706;
+  border: 2px solid #d3070f;
   border-radius: 10px;
   box-shadow: 0 4px 18px rgba(0, 0, 0, 0.22);
   font-family: -apple-system, "Segoe UI", Arial, sans-serif;
@@ -26,7 +26,7 @@
 }
 
 #abg-panel .abg-head {
-  background: #d97706;
+  background: #d3070f;
   color: #fff;
   padding: 8px 12px;
   border-radius: 8px 8px 0 0;
@@ -55,17 +55,44 @@
   padding: 10px 12px 14px;
 }
 
-#abg-panel .abg-schritt {
+#abg-panel .abg-reiter {
+  display: flex;
+  border-bottom: 1px solid #e5e7eb;
+}
+
+#abg-panel .abg-tab {
+  flex: 1;
+  padding: 9px 4px;
+  border: none;
+  background: none;
+  font-size: 12px;
+  font-family: inherit;
+  color: #64748b;
+  cursor: pointer;
+  border-bottom: 2px solid transparent;
+}
+
+#abg-panel .abg-tab.abg-aktiv {
+  color: #991b1b;
+  border-bottom-color: #d3070f;
+  font-weight: 600;
+}
+
+#abg-panel .abg-inhalt {
+  padding: 10px 0 4px;
+}
+
+#abg-panel .abg-karte {
   border: 1px solid #e5e7eb;
   border-radius: 8px;
   padding: 8px 10px;
-  margin-bottom: 10px;
+  margin-top: 10px;
 }
 
-#abg-panel .abg-schritt h4 {
+#abg-panel .abg-karte h4 {
   margin: 0 0 6px;
   font-size: 12.5px;
-  color: #92400e;
+  color: #991b1b;
 }
 
 #abg-panel label {
@@ -101,7 +128,7 @@
   width: 100%;
   margin-top: 8px;
   padding: 7px 10px;
-  background: #d97706;
+  background: #d3070f;
   color: #fff;
   border: none;
   border-radius: 6px;
@@ -111,7 +138,7 @@
 }
 
 #abg-panel button:hover {
-  background: #b45309;
+  background: #a80309;
 }
 
 #abg-panel button.abg-sekundaer {
@@ -156,18 +183,69 @@
   margin-top: 4px;
 }
 
+/* Eingeklappt: rundes Icon-Knöpfchen statt Beschriftung. Das Icon liegt auf
+   weißem Grund, weil es selbst schon rot ist — roter Grund würde es schlucken. */
 #abg-toggle {
   position: fixed;
   top: 80px;
   right: 16px;
   z-index: 999998;
-  background: #d97706;
-  color: #fff;
-  border: none;
-  border-radius: 8px;
-  padding: 8px 10px;
-  font-size: 12px;
-  font-weight: 600;
+  width: 44px;
+  height: 44px;
+  padding: 6px;
+  background: #fff;
+  color: #d3070f;
+  border: 2px solid #d3070f;
+  border-radius: 50%;
+  font-size: 16px;
+  font-weight: 700;
+  line-height: 1;
   cursor: pointer;
   box-shadow: 0 2px 10px rgba(0, 0, 0, 0.2);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+#abg-toggle img {
+  width: 28px;
+  height: 28px;
+  display: block;
+}
+
+/* Erklärzeile über dem Prompt — etwas kräftiger als die übrigen Hinweise,
+   weil hier ein Arbeitsschritt von Hand nötig ist (ZIP in den Import-Ordner). */
+#abg-panel .abg-schritt {
+  background: #fef2f2;
+  border-left: 3px solid #d3070f;
+  padding: 6px 8px;
+  color: #991b1b;
+  margin-bottom: 6px;
+}
+
+/* Ankreuzfelder im Reiter "Einstellungen" — Kästchen und Text in einer Zeile,
+   nicht wie die übrigen Labels als eigene Zeile über dem Feld. */
+#abg-panel .abg-check {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 8px 0;
+  font-weight: normal;
+  cursor: pointer;
+}
+#abg-panel .abg-check input {
+  width: auto;
+  margin: 0;
+}
+
+/* Die Reiter sind technisch <button> und erben sonst beim Überfahren den roten
+   Knopf-Hintergrund — dann steht dunkelrote Schrift auf Rot (Arne, 10.09.2026).
+   Höhere Spezifität als "#abg-panel button:hover", deshalb über .abg-reiter. */
+#abg-panel .abg-reiter .abg-tab:hover,
+#abg-panel .abg-reiter .abg-tab:focus {
+  background: #fef2f2;
+  color: #991b1b;
+}
+#abg-panel .abg-reiter .abg-tab.abg-aktiv:hover {
+  background: #fee2e2;
+  color: #991b1b;
 }

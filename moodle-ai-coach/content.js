@@ -534,16 +534,32 @@
     return { ok, fehler, gruppen: gruppen.length, trocken: true };
   }
 
+  // Bei Zufallsfragen-Pools liefert dieselbe Bewertungsseiten-URL nicht immer
+  // alle Versuche in einem Aufruf zurueck (Moodle-seitige Anzeige-Unregelmaessigkeit,
+  // kein Fehler in unserer Logik) - ein fehlendes Punktefeld deshalb erst nach ein
+  // paar erneuten Ladeversuchen als wirklich fehlend werten.
+  async function seiteMitFeldernLaden(url, benoetigteFelder, versuche) {
+    let form = null, felder = null;
+    for (let i = 0; i < versuche; i++) {
+      const doc = await fetchDoc(url);
+      form = doc.querySelector('form#manualgradingform');
+      if (!form) throw new Error('Bewertungsformular nicht gefunden');
+      felder = formularFelder(form);
+      const alleDa = benoetigteFelder.every((name) => felder.has(name));
+      if (alleDa || i === versuche - 1) break;
+    }
+    return { form, felder };
+  }
+
   async function eintragen(liste, kiHinweis, onLog, onProgress) {
     const gruppen = gruppieren(liste);
     let ok = 0, fehler = 0, fertig = 0;
     for (const g of gruppen) {
       try {
         const url = seiteUrl(g.slot, g.qid, 'all');
-        const doc = await fetchDoc(url);
-        const form = doc.querySelector('form#manualgradingform');
-        if (!form) throw new Error('Bewertungsformular nicht gefunden');
-        let felder = formularFelder(form);
+        const benoetigt = g.eintraege.map((e) => e.markfeld);
+        const { form, felder: geladen } = await seiteMitFeldernLaden(url, benoetigt, 3);
+        let felder = geladen;
         const gesetzt = [];
         g.eintraege.forEach((e) => {
           if (!felder.has(e.markfeld)) {
