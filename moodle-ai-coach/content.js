@@ -345,12 +345,23 @@
       .replace(/\s+/g, ' ').trim();
   };
 
+  // Essay-Antwortfeld: je nach Antwortformat der Frage ist es entweder ein
+  // Textarea (Format „Nur Text"/„Text mit Zeilenumbruechen") oder — bei
+  // Format „HTML-Editor" — ein schreibgeschuetztes DIV mit derselben Klasse.
+  // Beides zaehlt als Essay-Frage, sonst werden HTML-Editor-Fragen als
+  // "kein Essay" verworfen und tauchen nirgends mehr auf.
+  const essayFeld = (q) =>
+    q.querySelector('textarea.qtype_essay_response, div.qtype_essay_response');
+  const essayWert = (feld) =>
+    (feld.tagName === 'TEXTAREA' ? (feld.value || '') : txt(feld)).trim();
+
   async function werteSeiteAus(doc, zeile) {
     const bloecke = [...doc.querySelectorAll('.que')];
     if (!bloecke.length) return null;
-    // Nur Essay-Fragen: die Antwort steht in einem readonly-Textarea mit dieser
-    // Klasse. Cloze- und Kurzantwortfragen haben sie nicht.
-    if (!bloecke.some((q) => q.querySelector('textarea.qtype_essay_response'))) return null;
+    // Nur Essay-Fragen: die Antwort steht in einem readonly-Feld mit dieser
+    // Klasse (Textarea oder DIV, siehe essayFeld). Cloze- und
+    // Kurzantwortfragen haben sie nicht.
+    if (!bloecke.some((q) => essayFeld(q))) return null;
 
     const erste = bloecke[0];
     const gi = erste.querySelector('.graderinfo');
@@ -379,7 +390,7 @@
     bloecke.forEach((q) => {
       const m = (q.id || '').match(/^question-(\d+)-(\d+)$/);
       if (!m) return;
-      const antwortFeld = q.querySelector('textarea.qtype_essay_response');
+      const antwortFeld = essayFeld(q);
       const mark = q.querySelector('input[name$="-mark"]');
       const komm = q.querySelector('textarea[name$="-comment"]');
       if (!antwortFeld || !mark) return;
@@ -388,7 +399,7 @@
       const schonBewertet = String(mark.value || '').trim() !== '';
       versuche.push({
         frage: zeile.name, qid: zeile.qid, slot: zeile.slot, qubaid: m[1],
-        antwort: (antwortFeld.value || '').trim(),
+        antwort: essayWert(antwortFeld),
         max: num((q.querySelector('input[name$="-maxmark"]') || {}).value) ?? frage.max,
         markfeld: mark.name,
         kommentarfeld: komm ? komm.name : null,

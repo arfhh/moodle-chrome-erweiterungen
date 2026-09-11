@@ -3,7 +3,7 @@
 Bewertet **kurze Freitextantworten** (ein bis drei Sätze) in Moodles Manueller
 Bewertung — Punkte **und** Sprachfeedback.
 
-Version 1.8.0 · vierte Erweiterung neben *Moodle AI Grader*, *Moodle AI Reviewer* und
+Version 1.8.4 · vierte Erweiterung neben *Moodle AI Grader*, *Moodle AI Reviewer* und
 *Notenstufen Autofill* · Lizenz: CC BY-SA 4.0 · A. Spielhoff
 
 ---
@@ -194,6 +194,21 @@ Am 28.08.2026 lesend am Hamburg-LMS verifiziert:
 
 Ein Trockenlauf mit genau dieser Logik ergab an einer echten Frage: 36 Felder,
 `sesskey` dabei, `cancel` nicht dabei, keine `undefined`-Werte, POST ≈ 3,9 KB.
+
+## Stand 1.8.4
+
+**1.8.4** — **Fehler behoben: Freitextfragen mit Antwortformat „HTML-Editor" wurden
+  nicht gefunden.** Der Coach hat die Essay-Antwort bisher nur in einem
+  `textarea.qtype_essay_response` gesucht. Das passt für die Antwortformate „Nur
+  Text" und „Text mit Zeilenumbrüchen" — bei „HTML-Editor" rendert Moodle die
+  schreibgeschützte Antwort dagegen als `div.qtype_essay_response`. Traf das zu, fiel
+  die Frage beim Auslesen komplett durch die Erkennung „ist das überhaupt eine
+  Essay-Frage?" und wurde als „kein Essay" verworfen — die Kopfzeile zeigte dann „0
+  Antworten auf 0 Freitextfragen", obwohl echte Freitextfragen mit Zufallsauswahl
+  vorlagen, und auch „Horizont neu schreiben" fand 0 Fragen, weil beide Wege dieselbe
+  Erkennung nutzen. Die Erkennung akzeptiert jetzt beide Feldarten; bei einem DIV wird
+  der Text wie beim Fragetext selbst aus dem HTML extrahiert statt über `.value`
+  gelesen.
 
 ## Stand 1.8.0
 
