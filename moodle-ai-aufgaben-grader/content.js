@@ -1,6 +1,6 @@
 /*
  * Moodle AI Aufgaben-Grader — content.js
- * Version 1.2.0
+ * Version 1.3.1
  *
  * Erscheint im Aufgaben-Modul (mod/assign) in der Bewerten-Ansicht:
  *  - action=grading  → Übersichtstabelle: Abgaben anonymisiert als ZIP + CSV
@@ -108,11 +108,17 @@
     }
   }
 
-  // Arbeitsblatt-Nummer am ANFANG des Dateinamens (z. B. "1.1-02…", "3.2.5…").
-  // Nur dieser Fall gilt als "Datei trägt einen Aufgabenbezug".
+  // Arbeitsblatt-Nummer am ANFANG des Dateinamens. Auf die Nummer folgt in dieser
+  // Materialreihe die NIVEAUSTUFE — Ziffer plus Großbuchstabe, z. B. "1D", "3F", "4G".
+  // Die gehört NICHT zur Nummer: "4.-1D-Sicherheitsbelehrung" hat die Nummer "4.",
+  // "4.1-01-4G-Atomgroesse" die Nummer "4.1-01". Ohne diese Grenze frisst der
+  // Nummernausdruck die Stufe mit auf (Arne, 11.09.2026).
   function blattNummer(name) {
-    const m = /^\s*(\d+(?:[.\-]\d+){1,3})/.exec(String(name));
-    return m ? m[1] : null;
+    const s = String(name);
+    const mitStufe = /^\s*([\d]+[\d.\-]*?)-\d[A-Za-z]-/.exec(s);
+    if (mitStufe) return mitStufe[1].replace(/-$/, '');
+    const ohne = /^\s*(\d+(?:[.\-]\d+){0,3})/.exec(s);
+    return ohne ? ohne[1] : null;
   }
 
   function dateiNameSicher(s) {
@@ -151,6 +157,12 @@
   //      Bewusst nur Rahmenangaben — WAS eine gute Antwort ist, steht in der
   //      Bewertungs-Skill der jeweiligen Lehrkraft, nie in der Erweiterung.
   // ---------------------------------------------------------------------
+  // Wortlaut wie in Reviewer und Coach, damit die SuS überall denselben Satz lesen.
+  // ACHTUNG: Das Kommentarfeld der Schnellbewertung ist ein schlichtes Textfeld —
+  // dort ist keine Kursivschrift möglich, der Hinweis steht als Klartext.
+  const KI_HINWEIS_STANDARD =
+    'Dieses Feedback wurde von der Lehrkraft mithilfe von KI-Unterstützung erstellt und geprüft.';
+
   const EINST_KEY = 'abgEinstellungen';
   // modus: 'schnell' = Voreinstellung. Unveränderte Abgaben werden gar nicht erst
   //                     geladen. Das ist gefahrlos, weil die Sicherung NICHT im
@@ -160,7 +172,8 @@
   //                     Moodle hat ihm schon einmal die Dateien einer Schülerin verloren).
   //         'backup'  = alles laden, alles ins ZIP. Für den ersten Lauf eines Themas,
   //                     nach einem Rechnerwechsel oder wenn der Output-Ordner fehlt.
-  const EINST_STANDARD = { skill: '', duplikate: true, loesungen: true, modus: 'schnell' };
+  const EINST_STANDARD = { skill: '', duplikate: true, loesungen: true, modus: 'schnell',
+    kiHinweis: true, kiHinweisText: KI_HINWEIS_STANDARD };
 
   async function einstellungenLaden() {
     const d = await storageGet([EINST_KEY]);
@@ -456,6 +469,10 @@
         <option value="schnell">Schnell — nur neue und geänderte Abgaben laden</option>
         <option value="backup">Vollständig — alle Abgaben laden (erster Lauf, neuer Rechner)</option>
       </select>
+      <label class="abg-check"><input type="checkbox" id="abg-ki"> KI-Hinweis unter jedes Feedback setzen</label>
+      <label for="abg-ki-text">Wortlaut des KI-Hinweises</label>
+      <textarea id="abg-ki-text" rows="2"></textarea>
+      <div class="abg-hinweis">Wird beim Eintragen angehängt, nicht von der KI geschrieben. Leeres Feld stellt den Standardsatz wieder her. Im Kommentarfeld der Schnellbewertung ist keine Kursivschrift möglich — der Hinweis steht als Klartext.</div>
       <button class="abg-sekundaer" id="abg-reset">Stand dieser Aufgabe zurücksetzen</button>
       <div class="abg-hinweis">Zurücksetzen vergisst, was beim letzten Lauf schon geladen war — der nächste Durchlauf holt dann wieder alles. Nötig, wenn der Output-Ordner verloren gegangen ist.</div>
       <button class="abg-sekundaer" id="abg-einst-speichern">Einstellungen speichern</button>
@@ -466,6 +483,8 @@
     panelEinstellungen.querySelector('#abg-dupl').checked = !!einst.duplikate;
     panelEinstellungen.querySelector('#abg-loes').checked = !!einst.loesungen;
     panelEinstellungen.querySelector('#abg-modus').value = einst.modus === 'backup' ? 'backup' : 'schnell';
+    panelEinstellungen.querySelector('#abg-ki').checked = einst.kiHinweis !== false;
+    panelEinstellungen.querySelector('#abg-ki-text').value = einst.kiHinweisText || KI_HINWEIS_STANDARD;
     panelEinstellungen.querySelector('#abg-reset').addEventListener('click', async () => {
       await storageRemove(['abgStand_' + cmid]);
       logZeile(body, 'Stand zurückgesetzt — der nächste Download holt wieder alle Abgaben.', 'ok');
@@ -475,6 +494,8 @@
       einst.duplikate = panelEinstellungen.querySelector('#abg-dupl').checked;
       einst.loesungen = panelEinstellungen.querySelector('#abg-loes').checked;
       einst.modus = panelEinstellungen.querySelector('#abg-modus').value;
+      einst.kiHinweis = panelEinstellungen.querySelector('#abg-ki').checked;
+      einst.kiHinweisText = panelEinstellungen.querySelector('#abg-ki-text').value.trim() || KI_HINWEIS_STANDARD;
       await einstellungenSpeichern(einst);
       logZeile(body, 'Einstellungen gespeichert.', 'ok');
     });
@@ -591,8 +612,11 @@
 
       const statusText = idx.status !== undefined ? (zellen[idx.status] || {}).textContent || '' : '';
       const statusKlein = statusText.trim().toLowerCase();
-      const ausgeschlossen = STATUS_AUSSCHLUSS.some((s) => statusKlein.includes(s));
-      if (idx.status !== undefined && ausgeschlossen) return; // keine Abgabe → überspringen
+      // Personen ohne jede Abgabe werden NICHT verworfen, sondern mitgeführt: sonst
+      // stehen sie in keiner CSV und können auch keine Rückmeldung bekommen, obwohl
+      // gerade sie eine brauchen (Arne, 11.09.2026).
+      const ohneAbgabe = idx.status !== undefined
+        && STATUS_AUSSCHLUSS.some((x) => statusKlein.includes(x));
 
       const dateien = [];
       const abgabeZelle = idx.abgabe !== undefined ? zellen[idx.abgabe] : tr;
@@ -604,7 +628,7 @@
         });
       }
 
-      ergebnis.push({ userid, name, statusText: statusText.trim(), dateien, grUrl: bewertenLink ? bewertenLink.href : null });
+      ergebnis.push({ userid, name, statusText: statusText.trim(), ohneAbgabe, dateien, grUrl: bewertenLink ? bewertenLink.href : null });
     });
     return ergebnis;
   }
@@ -658,9 +682,13 @@
 
     const karte = await kuerzelZuweisen(courseKey, teilnehmer.map((t) => ({ userid: t.userid, name: t.name })));
 
-    const ohneDatei = teilnehmer.filter((t) => !t.dateien.length);
+    const garnichts = teilnehmer.filter((t) => t.ohneAbgabe);
+    if (garnichts.length) {
+      logZeile(body, `${garnichts.length} Person(en) ohne jede Abgabe — sie stehen mit in der CSV, damit sie eine Rückmeldung bekommen können: ${garnichts.map((t) => karte[t.userid].kuerzel).join(', ')}`);
+    }
+    const ohneDatei = teilnehmer.filter((t) => !t.ohneAbgabe && !t.dateien.length);
     if (ohneDatei.length) {
-      logZeile(body, `${ohneDatei.length} Abgabe(n) ohne erkannte Datei (z. B. Online-Text statt Datei-Abgabe) — nur in der CSV enthalten, keine Datei im ZIP: ${ohneDatei.map((t) => karte[t.userid].kuerzel).join(', ')}`, 'fehler');
+      logZeile(body, `${ohneDatei.length} Abgabe(n) ohne erkannte Datei (z. B. Online-Text statt Datei-Abgabe): ${ohneDatei.map((t) => karte[t.userid].kuerzel).join(', ')}`, 'fehler');
     }
 
     // Ein einziger Wurzelordner im ZIP, mit STABILEM Namen (Kurs + Aufgabe, ohne
@@ -712,7 +740,17 @@
 
       for (const d of t.dateien) {
         const blatt = blattNummer(d.dateiname);
-        const bkey = kuerzel + '|' + (blatt || 'ohne');
+        // Schlüssel für die Änderungserkennung aus dem GANZEN Dateinamen, nicht aus
+        // der Nummer: dieselbe Nummer kann für zwei verschiedene Arbeitsblätter
+        // vergeben sein (belegt: "4.1-01-…-Sicherheitsbelehrung" und
+        // "4.1-01-…-Atomgroesse" im selben Thema). Über die Nummer allein würden
+        // die beiden als ein und dasselbe Blatt gelten.
+        // Beim zweiten Herunterladen hängen Browser und Betriebssystem ein " 2"
+        // oder " 3" an den Namen — es bleibt dasselbe Arbeitsblatt. Ohne diese
+        // Entdoppelung gilt eine erneut hochgeladene Fassung als neues Blatt statt
+        // als geänderte (Arne, 11.09.2026).
+        const bkey = kuerzel + '|' + dateiNameSicher(d.dateiname)
+          .replace(/[ _-]\d{1,2}(?=\.[a-z0-9]+$)/i, '').toLowerCase();
 
         // Vorfilter: gleicher Dateiname UND gleiche Hochladezeit wie beim letzten Lauf.
         const bekannt = d.zeit
@@ -763,7 +801,7 @@
         }
       }
 
-      inhalt.push({ kuerzel, dateien: eigene.map((x) => ({
+      inhalt.push({ kuerzel, ohne_abgabe: !!t.ohneAbgabe, dateien: eigene.map((x) => ({
         datei: x.datei, blatt: x.blatt, status: x.status, im_zip: x.im_zip,
         pruefsumme: x.pruefsumme.slice(0, 16), name_ersetzt: x.name_ersetzt,
       })) });
@@ -773,8 +811,10 @@
     logZeile(body, `Abgleich mit dem letzten Lauf: ${zaehler.neu} neu, ${zaehler.geaendert} geändert, ${zaehler.unveraendert} unverändert`
       + (zaehler.uebersprungen ? ` (davon ${zaehler.uebersprungen} nicht geladen).` : '.'));
 
-    if (!zipDateien.length) { logZeile(body, 'Keine Datei zum Einpacken (alles unverändert oder nichts ladbar).', 'fehler'); return; }
     const anzahlAbgabeDateien = zipDateien.length;
+    if (!anzahlAbgabeDateien) {
+      logZeile(body, 'Keine neue oder geänderte Datei — es entsteht trotzdem ein ZIP mit CSV und Laufzettel.');
+    }
 
     const heute = new Date().toISOString().slice(0, 10);
 
@@ -930,6 +970,9 @@
     const kuerzelZuUserid = {};
     Object.entries(karte).forEach(([uid, e]) => { kuerzelZuUserid[e.kuerzel] = uid; });
 
+    const einst = await einstellungenLaden();
+    const hinweis = einst.kiHinweis !== false ? (einst.kiHinweisText || KI_HINWEIS_STANDARD).trim() : '';
+
     let getroffen = 0, noten = 0, kommentare = 0;
     const unbekannt = [], nichtAufSeite = [];
 
@@ -945,7 +988,11 @@
       if (!notenFeld && !kommentarFeld) { nichtAufSeite.push(kuerzel); continue; }
 
       const note = iNote >= 0 ? (z[iNote] || '').trim() : '';
-      const feedback = iFeedback >= 0 ? (z[iFeedback] || '').trim() : '';
+      let feedback = iFeedback >= 0 ? (z[iFeedback] || '').trim() : '';
+      // Hinweis anhängen — aber nur einmal, falls die CSV ihn schon enthält.
+      if (feedback && hinweis && feedback.indexOf(hinweis) === -1) {
+        feedback = feedback + '\n\n' + hinweis;
+      }
 
       if (note !== '' && notenFeld) {
         notenFeld.value = note;
@@ -971,8 +1018,15 @@
     }
     if (!getroffen) { logZeile(body, 'Keine einzige Zeile konnte zugeordnet werden.', 'fehler'); return; }
 
-    logZeile(body, `${getroffen} Person(en) ausgefüllt: ${kommentare} Feedback, ${noten} Note(n). NICHT gespeichert.`, 'ok');
+    logZeile(body, `${getroffen} Person(en) ausgefüllt: ${kommentare} Feedback, ${noten} Note(n). NICHT gespeichert.`
+      + (hinweis ? ' KI-Hinweis angehängt.' : ' Ohne KI-Hinweis.'), 'ok');
     logZeile(body, 'Jetzt in der Tabelle prüfen und Moodles Knopf „Speichern" ganz unten drücken.', 'ok');
+
+    // Panel einklappen: ab hier wird in der Tabelle geprüft und dort gespeichert,
+    // das Panel würde nur die Sicht verstellen (Arne, 11.09.2026).
+    const panel = document.getElementById('abg-panel');
+    const knopf = document.getElementById('abg-toggle');
+    if (panel && knopf) { panel.hidden = true; knopf.hidden = false; }
 
     const ersteMarkierung = document.querySelector('textarea[name^="quickgrade_comments_"][style*="outline"]');
     if (ersteMarkierung) ersteMarkierung.scrollIntoView({ behavior: 'smooth', block: 'center' });

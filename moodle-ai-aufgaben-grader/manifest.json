@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Moodle AI Aufgaben-Grader",
-  "version": "1.2.0",
+  "version": "1.3.1",
   "description": "Lädt anonymisierte Datei-Abgaben aus dem Aufgaben-Modul als ZIP herunter, erzeugt den passenden KI-Auftrags-Prompt und trägt Note und Feedback aus einer CSV-Datei automatisch in Moodle ein.",
   "permissions": [
     "storage"
