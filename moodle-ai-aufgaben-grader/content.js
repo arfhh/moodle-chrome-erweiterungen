@@ -1,6 +1,6 @@
 /*
  * Moodle AI Aufgaben-Grader — content.js
- * Version 1.3.1
+ * Version 1.3.3
  *
  * Erscheint im Aufgaben-Modul (mod/assign) in der Bewerten-Ansicht:
  *  - action=grading  → Übersichtstabelle: Abgaben anonymisiert als ZIP + CSV
@@ -63,22 +63,41 @@
   // ---------------------------------------------------------------------
   const HAT_STORAGE = (typeof chrome !== 'undefined' && !!chrome.storage);
 
+  // Wird die Erweiterung neu geladen, während ein Moodle-Tab offen ist, läuft das
+  // alte Content-Script dort weiter, verliert aber die Verbindung zur Erweiterung.
+  // Jeder chrome.*-Aufruf wirft dann "Extension context invalidated" — eine Meldung,
+  // mit der niemand etwas anfangen kann. Deshalb vorher prüfen und im Klartext
+  // sagen, was zu tun ist (Arne, 11.09.2026, zweites Auftreten).
+  function kontextGueltig() {
+    try { return !!(chrome && chrome.runtime && chrome.runtime.id); }
+    catch (e) { return false; }
+  }
+  const KONTEXT_TEXT = 'Die Erweiterung wurde neu geladen, seit diese Seite offen ist. '
+    + 'Bitte die Moodle-Seite einmal neu laden (Cmd+R bzw. Strg+R) und den Schritt wiederholen.';
+  function istKontextfehler(e) {
+    return /Extension context invalidated|message port closed|receiving end does not exist/i
+      .test(String((e && e.message) || e));
+  }
+
   function storageGet(keys) {
     return new Promise((resolve) => {
-      if (!HAT_STORAGE) return resolve({});
-      chrome.storage.local.get(keys, (r) => resolve(r || {}));
+      if (!HAT_STORAGE || !kontextGueltig()) return resolve({});
+      try { chrome.storage.local.get(keys, (r) => resolve(r || {})); }
+      catch (e) { resolve({}); }
     });
   }
   function storageSet(obj) {
     return new Promise((resolve) => {
-      if (!HAT_STORAGE) return resolve();
-      chrome.storage.local.set(obj, () => resolve());
+      if (!HAT_STORAGE || !kontextGueltig()) return resolve();
+      try { chrome.storage.local.set(obj, () => resolve()); }
+      catch (e) { resolve(); }
     });
   }
   function storageRemove(keys) {
     return new Promise((resolve) => {
-      if (!HAT_STORAGE) return resolve();
-      chrome.storage.local.remove(keys, () => resolve());
+      if (!HAT_STORAGE || !kontextGueltig()) return resolve();
+      try { chrome.storage.local.remove(keys, () => resolve()); }
+      catch (e) { resolve(); }
     });
   }
 
@@ -158,8 +177,9 @@
   //      Bewertungs-Skill der jeweiligen Lehrkraft, nie in der Erweiterung.
   // ---------------------------------------------------------------------
   // Wortlaut wie in Reviewer und Coach, damit die SuS überall denselben Satz lesen.
-  // ACHTUNG: Das Kommentarfeld der Schnellbewertung ist ein schlichtes Textfeld —
-  // dort ist keine Kursivschrift möglich, der Hinweis steht als Klartext.
+  // Moodle rendert HTML im Feedback-Kommentar. Ist das Feedback selbst als HTML
+  // geschrieben, wird der Hinweis ebenfalls als HTML angehängt (klein und grau);
+  // sonst als Klartext mit Leerzeile davor.
   const KI_HINWEIS_STANDARD =
     'Dieses Feedback wurde von der Lehrkraft mithilfe von KI-Unterstützung erstellt und geprüft.';
 
@@ -472,7 +492,7 @@
       <label class="abg-check"><input type="checkbox" id="abg-ki"> KI-Hinweis unter jedes Feedback setzen</label>
       <label for="abg-ki-text">Wortlaut des KI-Hinweises</label>
       <textarea id="abg-ki-text" rows="2"></textarea>
-      <div class="abg-hinweis">Wird beim Eintragen angehängt, nicht von der KI geschrieben. Leeres Feld stellt den Standardsatz wieder her. Im Kommentarfeld der Schnellbewertung ist keine Kursivschrift möglich — der Hinweis steht als Klartext.</div>
+      <div class="abg-hinweis">Wird beim Eintragen angehängt, nicht von der KI geschrieben. Leeres Feld stellt den Standardsatz wieder her. Ist das Feedback als HTML geschrieben, wird der Hinweis klein und grau angehängt, sonst als Klartext.</div>
       <button class="abg-sekundaer" id="abg-reset">Stand dieser Aufgabe zurücksetzen</button>
       <div class="abg-hinweis">Zurücksetzen vergisst, was beim letzten Lauf schon geladen war — der nächste Durchlauf holt dann wieder alles. Nötig, wenn der Output-Ordner verloren gegangen ist.</div>
       <button class="abg-sekundaer" id="abg-einst-speichern">Einstellungen speichern</button>
@@ -507,8 +527,9 @@
     reiter.querySelectorAll('.abg-tab').forEach((t) => t.addEventListener('click', () => zeige(t.dataset.tab)));
 
     panelDownload.querySelector('#abg-download').addEventListener('click', () => {
+      if (!kontextGueltig()) { logZeile(body, KONTEXT_TEXT, 'fehler'); return; }
       herunterladen(body, courseKey, panelDownload.querySelector('#abg-art').value, einst)
-        .catch((e) => logZeile(body, 'Fehler beim Herunterladen: ' + e.message, 'fehler'));
+        .catch((e) => logZeile(body, istKontextfehler(e) ? KONTEXT_TEXT : 'Fehler beim Herunterladen: ' + e.message, 'fehler'));
     });
 
     if (!hatSchnellbewertung) {
@@ -527,10 +548,11 @@
       });
       panelEinfuegen.querySelector('#abg-start').addEventListener('click', async () => {
         if (!ausgewaehlteCsv) { logZeile(body, 'Bitte zuerst eine CSV-Datei wählen.', 'fehler'); return; }
+        if (!kontextGueltig()) { logZeile(body, KONTEXT_TEXT, 'fehler'); return; }
         try {
           await inSchnellbewertungEintragen(body, courseKey, ausgewaehlteCsv);
         } catch (e) {
-          logZeile(body, 'Fehler beim Einlesen der CSV: ' + e.message, 'fehler');
+          logZeile(body, istKontextfehler(e) ? KONTEXT_TEXT : 'Fehler beim Einlesen der CSV: ' + e.message, 'fehler');
         }
       });
     }
@@ -991,7 +1013,10 @@
       let feedback = iFeedback >= 0 ? (z[iFeedback] || '').trim() : '';
       // Hinweis anhängen — aber nur einmal, falls die CSV ihn schon enthält.
       if (feedback && hinweis && feedback.indexOf(hinweis) === -1) {
-        feedback = feedback + '\n\n' + hinweis;
+        const istHtml = /<(p|br|div|strong|em|span|ul|ol)\b/i.test(feedback);
+        feedback = istHtml
+          ? feedback + `<p><small><em style='color:#777'>${hinweis}</em></small></p>`
+          : feedback + '\n\n' + hinweis;
       }
 
       if (note !== '' && notenFeld) {
@@ -1037,8 +1062,9 @@
   // ---------------------------------------------------------------------
   (async () => {
     const body = panelBauen();
+    if (!kontextGueltig()) { logZeile(body, KONTEXT_TEXT, 'fehler'); return; }
     try { await modusUebersicht(body); }
-    catch (e) { logZeile(body, 'Fehler: ' + e.message, 'fehler'); }
+    catch (e) { logZeile(body, istKontextfehler(e) ? KONTEXT_TEXT : 'Fehler: ' + e.message, 'fehler'); }
   })();
 
 })();

@@ -4,7 +4,7 @@
 # Aufruf:  bash "zips-bauen.sh"
 set -e
 REPO="$(cd "$(dirname "$0")" && pwd)"
-NAMEN="moodle-ai-grader moodle-ai-reviewer moodle-ai-coach moodle-cloze-autofill notenstufen-extension"
+NAMEN="moodle-ai-grader moodle-ai-reviewer moodle-ai-coach moodle-ai-aufgaben-grader moodle-cloze-autofill notenstufen-extension"
 
 # zip kann nicht in jeden gemounteten Ordner schreiben (Temp-Datei + Umbenennen).
 # Deshalb ausserhalb bauen und hineinkopieren.
