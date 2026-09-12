@@ -135,6 +135,8 @@
     return new DOMParser().parseFromString(await r.text(), 'text/html');
   }
 
+  const warte = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
   // grade=needsgrading fürs Auslesen (Essays sind nie autobewertet),
   // grade=all fürs Eintragen und Gegenprüfen — ein bewerteter Versuch
   // verlässt needsgrading sofort.
@@ -332,7 +334,16 @@
       const slot = (href.match(/slot=(\d+)/) || [])[1];
       const qid = (href.match(/qid=(\d+)/) || [])[1];
       if (!slot || !qid) return null;
-      return { slot, qid, name: (tr.cells[2] ? tr.cells[2].textContent.trim() : '') };
+      // Letzte Spalte ("Summe") traegt die tatsaechliche Anzahl Versuche dieser
+      // Frage — damit weiss das Auslesen, wann es wirklich alle beisammen hat
+      // (siehe seiteAllerVersucheLaden), statt sich auf einen einzelnen Ladeversuch
+      // zu verlassen.
+      const summeTxt = tr.cells[5] ? tr.cells[5].textContent.trim() : '';
+      const summeM = summeTxt.match(/^(\d+)/);
+      return {
+        slot, qid, name: (tr.cells[2] ? tr.cells[2].textContent.trim() : ''),
+        summe: summeM ? +summeM[1] : null
+      };
     }).filter(Boolean);
   }
 
@@ -355,8 +366,35 @@
   const essayWert = (feld) =>
     (feld.tagName === 'TEXTAREA' ? (feld.value || '') : txt(feld)).trim();
 
-  async function werteSeiteAus(doc, zeile) {
-    const bloecke = [...doc.querySelectorAll('.que')];
+  // Live am 11.09.2026 bestaetigt (siehe seiteMitFeldernLaden weiter unten):
+  // Bei einer Zufallsfrage mit mehr Versuchen, als Moodle auf einen Schlag zeigt,
+  // liefert dieselbe Bewertungsseiten-URL bei wiederholtem Laden eine ANDERE
+  // Teilmenge der .que-Bloecke. Ein einzelner fetchDoc()-Aufruf beim Auslesen
+  // (Freitextaufgaben durchsuchen) uebernimmt deshalb manchmal nur einen Teil der
+  // echten Versuche — die fehlenden werden nie an die KI geschickt und bleiben für
+  // immer unbewertet, ohne dass das auffaellt. Deshalb ueber mehrere Ladeversuche
+  // hinweg SAMMELN (nach Versuchs-id dedupliziert), bis entweder die aus der
+  // Uebersichtstabelle bekannte Gesamtzahl (zeile.summe) erreicht ist oder die
+  // Versuche aufgebraucht sind.
+  async function seiteAllerVersucheLaden(zeile, versucheMax) {
+    let letzterDoc = null;
+    const gesehen = new Set();
+    const bloecke = [];
+    for (let i = 0; i < versucheMax; i++) {
+      if (i > 0) await warte(500);
+      const doc = await fetchDoc(seiteUrl(zeile.slot, zeile.qid, 'all'));
+      letzterDoc = doc;
+      [...doc.querySelectorAll('.que')].forEach((q) => {
+        const m = (q.id || '').match(/^question-(\d+)-(\d+)$/);
+        const key = m ? m[1] : q.id;
+        if (key && !gesehen.has(key)) { gesehen.add(key); bloecke.push(q); }
+      });
+      if (zeile.summe != null && bloecke.length >= zeile.summe) break;
+    }
+    return { bloecke, letzterDoc };
+  }
+
+  async function werteSeiteAus(bloecke, zeile) {
     if (!bloecke.length) return null;
     // Nur Essay-Fragen: die Antwort steht in einem readonly-Feld mit dieser
     // Klasse (Textarea oder DIV, siehe essayFeld). Cloze- und
@@ -419,12 +457,21 @@
     let fuerGrader = 0, ohneMarker = 0, strengUebersprungen = 0;
     const warteschlange = [...zeilen];
 
-    await Promise.all(Array.from({ length: 4 }, async () => {
+    // War 4 parallele Worker. Live am 11.09.2026 blieb trotz Sammel-Logik in
+    // seiteAllerVersucheLaden weiterhin vereinzelt ein Versuch unentdeckt — der
+    // Verdacht: Moodles Bewertungsseite haelt fuer die Zufallsfragen-Anzeige
+    // offenbar session-gebundenen Zustand, und gleichzeitige fetch()-Aufrufe an
+    // report.php fuer VERSCHIEDENE Fragen (verschiedene qid, gleiche Session)
+    // koennen sich dabei gegenseitig stoeren — genau das Muster einer instabilen
+    // Teilmenge, das mehr Ladeversuche allein nicht zuverlaessig beheben. Deshalb
+    // nacheinander statt parallel: langsamer, aber nur noch ein Request gleichzeitig
+    // gegen diese Seite.
+    await Promise.all(Array.from({ length: 1 }, async () => {
       while (warteschlange.length) {
         const z = warteschlange.shift();
         try {
-          const doc = await fetchDoc(seiteUrl(z.slot, z.qid, 'all'));
-          const res = await werteSeiteAus(doc, z);
+          const { bloecke } = await seiteAllerVersucheLaden(z, 8);
+          const res = await werteSeiteAus(bloecke, z);
           if (!res) { keinEssay++; }
           else {
             const schluessel = res.frage.name || (z.slot + '|' + z.qid);
@@ -549,17 +596,31 @@
   // alle Versuche in einem Aufruf zurueck (Moodle-seitige Anzeige-Unregelmaessigkeit,
   // kein Fehler in unserer Logik) - ein fehlendes Punktefeld deshalb erst nach ein
   // paar erneuten Ladeversuchen als wirklich fehlend werten.
+  // Live am 11.09.2026 bestaetigt: dieselbe URL liefert bei mehr Versuchen, als
+  // Moodle auf einmal anzeigt, bei jedem Aufruf eine ANDERE Teilmenge der Zeilen
+  // (z. B. 5 von 7, aber nicht immer dieselben 5) — keine feste Seitengroesse mit
+  // stabiler Sortierung. Ein reines Neuladen-und-Ersetzen verliert deshalb Felder,
+  // die im vorherigen Versuch schon da waren. Stattdessen ueber alle Versuche
+  // hinweg SAMMELN: jedes einmal gesehene Feld bleibt erhalten, auch wenn eine
+  // spaetere Seite es nicht mehr zeigt.
   async function seiteMitFeldernLaden(url, benoetigteFelder, versuche) {
-    let form = null, felder = null;
+    let form = null;
+    const gesammelt = new URLSearchParams();
+    const gesehen = new Set();
     for (let i = 0; i < versuche; i++) {
+      if (i > 0) await warte(500); // Moodle etwas Zeit geben, bevor erneut geladen wird
       const doc = await fetchDoc(url);
-      form = doc.querySelector('form#manualgradingform');
-      if (!form) throw new Error('Bewertungsformular nicht gefunden');
-      felder = formularFelder(form);
-      const alleDa = benoetigteFelder.every((name) => felder.has(name));
-      if (alleDa || i === versuche - 1) break;
+      const f = doc.querySelector('form#manualgradingform');
+      if (!f) throw new Error('Bewertungsformular nicht gefunden');
+      form = f; // neuestes Formular liefert Action-URL und Submit-Button
+      const felder = formularFelder(f);
+      [...new Set(felder.keys())].forEach((name) => {
+        if (!gesehen.has(name)) { gesammelt.set(name, felder.get(name)); gesehen.add(name); }
+      });
+      const alleDa = benoetigteFelder.every((name) => gesammelt.has(name));
+      if (alleDa) break;
     }
-    return { form, felder };
+    return { form, felder: gesammelt };
   }
 
   async function eintragen(liste, kiHinweis, onLog, onProgress) {
@@ -569,7 +630,7 @@
       try {
         const url = seiteUrl(g.slot, g.qid, 'all');
         const benoetigt = g.eintraege.map((e) => e.markfeld);
-        const { form, felder: geladen } = await seiteMitFeldernLaden(url, benoetigt, 3);
+        const { form, felder: geladen } = await seiteMitFeldernLaden(url, benoetigt, 8);
         let felder = geladen;
         const gesetzt = [];
         g.eintraege.forEach((e) => {
@@ -601,14 +662,34 @@
             body: felder.toString()
           });
           if (!antwort.ok) throw new Error('HTTP ' + antwort.status + ' beim Speichern');
-          const kontrolle = await fetchDoc(url);
+          // Gegenprobe mit bis zu drei Ladeversuchen: dieselbe Moodle-seitige
+          // Anzeige-Unregelmaessigkeit, die schon beim Auslesen manchmal ein
+          // Punktefeld auf der ersten Seite fehlen laesst (siehe
+          // seiteMitFeldernLaden), trifft auch die Kontrolle danach — ein
+          // gespeicherter Wert wuerde sonst faelschlich als fehlgeschlagen
+          // gemeldet.
+          let ausstehend = gesetzt.slice();
+          const bestaetigtBei = new Map();
+          for (let versuch = 0; versuch < 8 && ausstehend.length; versuch++) {
+            if (versuch > 0) await warte(500);
+            const kontrolle = await fetchDoc(url);
+            ausstehend = ausstehend.filter((e) => {
+              const f = kontrolle.querySelector(`input[name="${CSS.escape(e.markfeld)}"]`);
+              const ist = f ? num(f.value) : null;
+              if (ist !== null && Math.abs(ist - e.punkte) < 0.005) {
+                bestaetigtBei.set(e, ist);
+                return false;
+              }
+              bestaetigtBei.set(e, ist); // letzter bekannter Stand, falls es dabei bleibt
+              return true;
+            });
+          }
           gesetzt.forEach((e) => {
-            const f = kontrolle.querySelector(`input[name="${CSS.escape(e.markfeld)}"]`);
-            const ist = f ? num(f.value) : null;
-            if (ist !== null && Math.abs(ist - e.punkte) < 0.005) {
+            if (!ausstehend.includes(e)) {
               ok++; onLog(`✓ ${e.frage} — ${komma(e.punkte)} von ${komma(e.max)}`, versuchLink(e));
             } else {
               fehler++;
+              const ist = bestaetigtBei.get(e);
               onLog(`✗ ${e.frage} — steht auf ${ist == null ? 'keinem Wert' : komma(ist)} `
                   + `statt ${komma(e.punkte)}`, versuchLink(e));
             }

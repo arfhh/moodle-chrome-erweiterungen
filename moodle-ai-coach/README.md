@@ -3,7 +3,7 @@
 Bewertet **kurze Freitextantworten** (ein bis drei Sätze) in Moodles Manueller
 Bewertung — Punkte **und** Sprachfeedback.
 
-Version 1.8.4 · vierte Erweiterung neben *Moodle AI Grader*, *Moodle AI Reviewer* und
+Version 1.8.7 · vierte Erweiterung neben *Moodle AI Grader*, *Moodle AI Reviewer* und
 *Notenstufen Autofill* · Lizenz: CC BY-SA 4.0 · A. Spielhoff
 
 ---
@@ -194,6 +194,74 @@ Am 28.08.2026 lesend am Hamburg-LMS verifiziert:
 
 Ein Trockenlauf mit genau dieser Logik ergab an einer echten Frage: 36 Felder,
 `sesskey` dabei, `cancel` nicht dabei, keine `undefined`-Werte, POST ≈ 3,9 KB.
+
+## Stand 1.8.7
+
+**1.8.7** — **Noch ein Versuch entging der Sammel-Logik aus 1.8.6 — Parallelität
+  als wahrscheinliche Mitursache entfernt, Nachladeversuche deutlich erhöht.**
+  Live nachgeprüft (11.09.2026, 30 Ladeversuche derselben Dalton-Seite in einer
+  Schleife): Ein und dieselbe Bewertungsseite zeigt konsequent nur 5 von 7
+  Versuchen gleichzeitig — die fehlenden 2 wechseln zwar, aber ein einzelner
+  Versuch (hier `question-2461708-3`) blieb selbst nach 4 Nachladeversuchen in
+  `seiteAllerVersucheLaden` unentdeckt und wurde deshalb nie in den Prompt
+  aufgenommen; nach dem Eintragen des JSON fehlte genau dieser eine Versuch weiter.
+  Zwei Änderungen:
+  - `ernten()` lief bisher mit **4 parallelen Workern**, die gleichzeitig
+    verschiedene Fragen (verschiedene `qid`, gleiche Session) von derselben
+    Bewertungsseite laden. Verdacht: Moodle hält für diese Zufallsfragen-Ansicht
+    offenbar sitzungsgebundenen Zustand, und gleichzeitige Anfragen an
+    `report.php` können sich dabei gegenseitig stören. Jetzt läuft das Auslesen
+    **nacheinander** (ein Worker) statt parallel — langsamer, aber nur noch eine
+    Anfrage gleichzeitig gegen diese Seite.
+  - Nachladeversuche beim Auslesen (`seiteAllerVersucheLaden`) und beim Eintragen
+    (`seiteMitFeldernLaden` und die Gegenprobe) von 4 auf **8** erhöht, mit
+    500 ms Pause dazwischen.
+
+  Bekannte Grenze: Bei besonders hartnäckigen Fällen kann auch das noch nicht
+  ausreichen. Zuverlässiger Indikator, ob wirklich alles erfasst wurde: die Spalte
+  „Zu bewerten" in der Übersichtstabelle muss nach dem Eintragen bei 0 stehen —
+  steht dort noch etwas, fehlt ein Versuch, und „Freitextaufgaben durchsuchen"
+  muss für diese Frage erneut laufen.
+
+## Stand 1.8.6
+
+**1.8.6** — **Fehlende Versuche beim Auslesen behoben: „Freitextaufgaben
+  durchsuchen" erfasste bei Zufallsfragen mit vielen Versuchen nicht alle.**
+  Gleiche Ursache wie in 1.8.5 (dieselbe Bewertungsseiten-URL zeigt bei
+  wiederholtem Laden eine andere Teilmenge der Versuche), aber an der anderen
+  Stelle: Das Auslesen (`ernten`/`werteSeiteAus`) hat bisher **nur einmal**
+  geladen. Bei einer Frage mit z. B. 7 Versuchen, von denen Moodle auf einen
+  Schlag nur 5 zeigt, kamen die fehlenden 2 gar nicht erst in den Prompt an die
+  KI — sie blieben unbemerkt unbewertet, auch nach mehreren Durchläufen mit
+  demselben JSON, weil das JSON sie nie enthielt. Live bestätigt: Nach dem Fix
+  in 1.8.5 blieben bei genau den Fragen mit mehr als 5 Versuchen weiterhin
+  Einträge auf „0 bewertet" stehen. Die Übersichtstabelle liefert eine Spalte
+  „Summe" mit der tatsächlichen Versuchszahl je Frage — diese Zahl wird jetzt
+  mitgelesen (`uebersichtsZeilen`) und beim Auslesen als Zielwert benutzt: Die
+  neue Funktion `seiteAllerVersucheLaden` lädt bis zu viermal nach (mit kleiner
+  Pause) und **sammelt** die gefundenen Versuche über alle Ladeversuche hinweg
+  (dedupliziert nach Versuchs-ID), bis entweder alle laut Summe da sind oder die
+  Versuche aufgebraucht sind. Zusätzlich die Gegenprobe beim Eintragen von drei
+  auf vier Ladeversuche angehoben.
+
+## Stand 1.8.5
+
+**1.8.5** — **Vereinzelte Fehleinträge beim Eintragen behoben: „Punktefeld nicht auf
+  der Seite" und „steht auf keinem Wert statt X" trotz erfolgreichen Speicherns.**
+  Live am 11.09.2026 nachvollzogen: Bei einer Zufallsfrage mit mehr Versuchen, als
+  Moodle auf der Bewertungsseite gleichzeitig zeigt (hier 7), liefert dieselbe URL bei
+  wiederholtem Laden **unterschiedliche Teilmengen der Zeilen** (mal 5 von 7, aber
+  nicht immer dieselben 5) — keine stabile Sortierung/Seitengröße. `seiteMitFeldernLaden`
+  hat vor dem Schreiben zwar mehrfach nachgeladen, dabei aber bei jedem Versuch das
+  komplette Feldset ersetzt statt es zu sammeln — zeigte der letzte Ladeversuch zufällig
+  eine andere Teilmenge, gingen vorher gefundene Felder wieder verloren, und ein
+  tatsächlich vorhandenes Feld wurde als „nicht auf der Seite" gemeldet. Jetzt werden
+  die Felder über alle Ladeversuche hinweg gesammelt, statt bei jedem Versuch verworfen
+  zu werden. Dieselbe Unregelmäßigkeit traf auch die Gegenprobe **nach** dem Speichern:
+  die hat bisher nur einmal geladen und ein an diesem Tag gerade nicht angezeigtes,
+  aber tatsächlich gespeichertes Feld als Fehlschlag gemeldet. Beide Stellen laden
+  jetzt mit kleiner Pause mehrfach nach (vier bzw. drei Versuche), bevor ein Feld
+  wirklich als fehlend gilt.
 
 ## Stand 1.8.4
 
