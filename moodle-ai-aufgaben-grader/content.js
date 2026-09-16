@@ -1,6 +1,6 @@
 /*
  * Moodle AI Aufgaben-Grader — content.js
- * Version 1.3.3
+ * Version 1.4.0
  *
  * Erscheint im Aufgaben-Modul (mod/assign) in der Bewerten-Ansicht:
  *  - action=grading  → Übersichtstabelle: Abgaben anonymisiert als ZIP + CSV
@@ -192,8 +192,12 @@
   //                     Moodle hat ihm schon einmal die Dateien einer Schülerin verloren).
   //         'backup'  = alles laden, alles ins ZIP. Für den ersten Lauf eines Themas,
   //                     nach einem Rechnerwechsel oder wenn der Output-Ordner fehlt.
+  // wahlAnteil: Anteil ALLER Wahlaufgaben zusammen an der Gesamtpunktzahl, in Prozent.
+  // Die Erweiterung rechnet damit nicht — sie gibt den Wert nur in den Auftrags-Prompt
+  // weiter. Welche Blätter Wahlaufgaben sind, steht am Dateinamen der Arbeitsblätter
+  // (Suffix "-Wahl"); das sieht nur die KI, nicht der Browser (Arne, 14.09.2026).
   const EINST_STANDARD = { skill: '', duplikate: true, loesungen: true, modus: 'schnell',
-    kiHinweis: true, kiHinweisText: KI_HINWEIS_STANDARD };
+    kiHinweis: true, kiHinweisText: KI_HINWEIS_STANDARD, wahlAnteil: 5.02 };
 
   async function einstellungenLaden() {
     const d = await storageGet([EINST_KEY]);
@@ -489,6 +493,9 @@
         <option value="schnell">Schnell — nur neue und geänderte Abgaben laden</option>
         <option value="backup">Vollständig — alle Abgaben laden (erster Lauf, neuer Rechner)</option>
       </select>
+      <label for="abg-wahl">Anteil aller Wahlaufgaben zusammen (%)</label>
+      <input type="number" id="abg-wahl" min="0" max="100" step="0.01">
+      <div class="abg-hinweis">Wahlaufgaben erkennt die KI am Suffix „-Wahl" im Dateinamen des Arbeitsblatts. Die Punkte je Aufgabe ergeben sich aus diesem Anteil und der Anzahl der Blätter — nicht umgekehrt. 0 bedeutet: keine Wahlaufgaben.</div>
       <label class="abg-check"><input type="checkbox" id="abg-ki"> KI-Hinweis unter jedes Feedback setzen</label>
       <label for="abg-ki-text">Wortlaut des KI-Hinweises</label>
       <textarea id="abg-ki-text" rows="2"></textarea>
@@ -503,6 +510,8 @@
     panelEinstellungen.querySelector('#abg-dupl').checked = !!einst.duplikate;
     panelEinstellungen.querySelector('#abg-loes').checked = !!einst.loesungen;
     panelEinstellungen.querySelector('#abg-modus').value = einst.modus === 'backup' ? 'backup' : 'schnell';
+    panelEinstellungen.querySelector('#abg-wahl').value =
+      Number.isFinite(einst.wahlAnteil) ? einst.wahlAnteil : EINST_STANDARD.wahlAnteil;
     panelEinstellungen.querySelector('#abg-ki').checked = einst.kiHinweis !== false;
     panelEinstellungen.querySelector('#abg-ki-text').value = einst.kiHinweisText || KI_HINWEIS_STANDARD;
     panelEinstellungen.querySelector('#abg-reset').addEventListener('click', async () => {
@@ -514,6 +523,8 @@
       einst.duplikate = panelEinstellungen.querySelector('#abg-dupl').checked;
       einst.loesungen = panelEinstellungen.querySelector('#abg-loes').checked;
       einst.modus = panelEinstellungen.querySelector('#abg-modus').value;
+      const wa = parseFloat(panelEinstellungen.querySelector('#abg-wahl').value);
+      einst.wahlAnteil = (Number.isFinite(wa) && wa >= 0 && wa <= 100) ? wa : EINST_STANDARD.wahlAnteil;
       einst.kiHinweis = panelEinstellungen.querySelector('#abg-ki').checked;
       einst.kiHinweisText = panelEinstellungen.querySelector('#abg-ki-text').value.trim() || KI_HINWEIS_STANDARD;
       await einstellungenSpeichern(einst);
@@ -865,6 +876,7 @@
       duplikatpruefung: !!(einst && einst.duplikate),
       loesungen: !!(einst && einst.loesungen),
       skill: (einst && einst.skill) || null,
+      wahl_anteil: (einst && Number.isFinite(einst.wahlAnteil)) ? einst.wahlAnteil : EINST_STANDARD.wahlAnteil,
       anzahl_abgaben: teilnehmer.length,
       anzahl_dateien: anzahlAbgabeDateien,
       abgleich: zaehler,
@@ -931,6 +943,12 @@
     z.push('');
     if (lauf.laufart === 'abschluss') {
       z.push('Da dies der Abschlusslauf ist: Nach dem Eintragen der Noten kann das Archiv im Output-Ordner gelöscht werden.');
+      z.push('');
+    }
+    if (typeof lauf.wahl_anteil === 'number') {
+      z.push(lauf.wahl_anteil > 0
+        ? `Gewichtung: Wahlaufgaben zusammen ${String(lauf.wahl_anteil).replace('.', ',')} % der Gesamtpunktzahl. Wahlaufgaben sind die Arbeitsblätter mit dem Suffix "-Wahl" im Dateinamen, alle übrigen sind Pflichtaufgaben.`
+        : 'Gewichtung: keine Wahlaufgaben — alle Arbeitsblätter zählen gleich.');
       z.push('');
     }
     z.push(lauf.skill

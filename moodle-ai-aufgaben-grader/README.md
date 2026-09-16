@@ -2,7 +2,7 @@
 
 **Lädt Datei-Abgaben aus dem Aufgaben-Modul anonymisiert herunter, erzeugt den Auftrags-Prompt für die KI-Bewertung und trägt Note + Feedback automatisch zurück.**
 
-Version 1.3.3 (Beta, im Live-Test) · Lizenz: CC BY-SA 4.0
+Version 1.4.0 (Beta, im Live-Test) · Lizenz: CC BY-SA 4.0
 
 > Anders als die übrigen Erweiterungen dieser Familie (Grader, Reviewer, Coach — alle für
 > Testfragen) bewertet der Abgabengrader **Datei-Abgaben** im Aufgaben-Modul (`mod/assign`):
