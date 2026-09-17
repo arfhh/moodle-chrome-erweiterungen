@@ -9,7 +9,7 @@ import { browser } from 'wxt/browser';
 
 /*
  * Moodle AI Aufgaben-Grader — content.js
- * Version 1.6.6
+ * Version 1.7.0
  *
  * Erscheint im Aufgaben-Modul (mod/assign) in der Bewerten-Ansicht:
  *  - action=grading  → Übersichtstabelle: Abgaben anonymisiert als ZIP + CSV
@@ -466,15 +466,41 @@ export function starteGrader() {
   // ---------------------------------------------------------------------
   // 3 · Kurs-ID ermitteln (für die kursweite Kürzel-ID-Karte)
   // ---------------------------------------------------------------------
+  // Der Schluessel, unter dem die Kuerzel-Karte liegt. Er MUSS bei jedem
+  // Aufruf derselbe sein — sonst ist die Karte scheinbar leer und alle
+  // Kuerzel werden neu vergeben. Genau das ist passiert (Arne, 17.09.2026).
+  //
+  // Die alte Fassung nahm den ERSTEN Kurs-Link der Seite. Der kann aus der
+  // Navigationsleiste stammen und auf einen ganz anderen Kurs zeigen; fehlte
+  // er, fiel sie still auf die Aufgaben-ID zurueck. Beides aendert den
+  // Schluessel, ohne dass man es merkt.
+  //
+  // Jetzt: mehrere Anker, vom verlaesslichsten zum schwaechsten. Die Liste
+  // dient zugleich der Wanderung — siehe kuerzelKarteFinden().
+  function courseKeyKandidaten() {
+    const k = [];
+    const dazu = (x) => { if (x && k.indexOf(x) === -1) k.push(x); };
+
+    // 1. Die Kurs-ID in den body-Klassen setzt Moodle selbst aus dem Kontext
+    //    der Seite. Sie kann nicht auf einen fremden Kurs zeigen.
+    const kl = /(?:^|\s)course-(\d+)(?:\s|$)/.exec(document.body.className || '');
+    if (kl) dazu('kurs' + kl[1]);
+
+    // 2. Der Kurs-Link in der Brotkrumenleiste gehoert zur Seitenhierarchie.
+    const brot = document.querySelector('.breadcrumb a[href*="course/view.php"], nav.breadcrumb a[href*="course/view.php"]');
+    if (brot) { const c = qparam(brot.href, 'id'); if (c) dazu('kurs' + c); }
+
+    // 3. Irgendein Kurs-Link — das alte Verhalten, nur noch als Rueckfalllinie.
+    const egal = document.querySelector('a[href*="/course/view.php?id="]');
+    if (egal) { const c = qparam(egal.href, 'id'); if (c) dazu('kurs' + c); }
+
+    // 4. Die Aufgaben-ID aus der URL. Immer vorhanden, aber je Aufgabe anders.
+    dazu('cmid' + cmid);
+    return k;
+  }
+
   function ermittleCourseKey() {
-    const link = document.querySelector('a[href*="/course/view.php?id="]')
-      || document.querySelector('nav.breadcrumb a[href*="course/view.php"]');
-    if (link) {
-      const cid = qparam(link.href, 'id');
-      if (cid) return 'kurs' + cid;
-    }
-    logKonsole('Konnte Kurs-ID nicht ermitteln, verwende Aufgaben-ID als Ersatzschlüssel (Kürzel gelten dann nur für diese Aufgabe).');
-    return 'cmid' + cmid;
+    return courseKeyKandidaten()[0];
   }
 
   // Lesbare Namen für den ZIP-Dateinamen (statt Kurs-/Aufgaben-ID) — derselbe
@@ -510,8 +536,26 @@ export function starteGrader() {
 
   // teilnehmer: [{userid, name}] — neue SuS bekommen fortlaufend die
   // nächste freie Nummer, bestehende behalten ihr Kürzel unverändert.
-  async function kuerzelZuweisen(courseKey, teilnehmer) {
-    const karte = await kuerzelKarteLaden(courseKey);
+  // Sucht die Karte unter ALLEN Schluesselkandidaten dieser Seite. Lag sie
+  // unter einem aelteren, wird sie uebernommen, statt neu zu vergeben.
+  // Rueckgabe: { karte, herkunft } — herkunft ist null, wenn nichts gefunden.
+  async function kuerzelKarteFinden() {
+    const kandidaten = courseKeyKandidaten();
+    for (const k of kandidaten) {
+      const karte = await kuerzelKarteLaden(k);
+      if (Object.keys(karte).length) return { karte, herkunft: k, ziel: kandidaten[0] };
+    }
+    return { karte: {}, herkunft: null, ziel: kandidaten[0] };
+  }
+
+  async function kuerzelZuweisen(courseKey, teilnehmer, melden) {
+    const fund = await kuerzelKarteFinden();
+    const karte = fund.karte;
+    if (fund.herkunft && fund.herkunft !== fund.ziel) {
+      await kuerzelKarteSpeichern(fund.ziel, karte);
+      if (melden) melden(`Kürzel-Karte lag unter dem alten Schlüssel "${fund.herkunft}" und wurde auf "${fund.ziel}" übernommen — die Kürzel bleiben dadurch gleich.`, 'ok');
+    }
+    const warVorhanden = Object.keys(karte).length;
     let maxNr = 0;
     Object.values(karte).forEach((e) => {
       const m = /-(\d+)$/.exec(e.kuerzel || '');
@@ -524,7 +568,17 @@ export function starteGrader() {
       maxNr += 1;
       karte[t.userid] = { kuerzel: initialen(t.name) + '-' + String(maxNr).padStart(2, '0'), name: t.name };
     });
-    await kuerzelKarteSpeichern(courseKey, karte);
+    // Eine komplette Neuvergabe ist fast immer ein Fehler: die Karte wurde
+    // nicht gefunden. Das MUSS im Panel stehen, nicht in der Konsole — sonst
+    // wandern die Nummern unbemerkt (Arne, 17.09.2026).
+    if (melden) {
+      if (!warVorhanden && neue.length > 2) {
+        melden(`ACHTUNG: Für diesen Kurs war keine Kürzel-Karte gespeichert — es wurden ${neue.length} Kürzel komplett NEU vergeben. Hast du diesen Kurs schon einmal bearbeitet, stimmen die Nummern jetzt nicht mehr mit deinem Archiv überein. Dann hier abbrechen und die gesicherte Karte im Reiter Einstellungen einlesen.`, 'fehler');
+      } else if (neue.length) {
+        melden(`${neue.length} neue Kürzel vergeben: ${neue.map((t) => karte[t.userid].kuerzel).join(', ')} — die übrigen ${warVorhanden} bleiben unverändert.`, 'ok');
+      }
+    }
+    await kuerzelKarteSpeichern(fund.ziel, karte);
     return karte;
   }
 
@@ -959,6 +1013,14 @@ export function starteGrader() {
       <label for="abg-ki-text">Wortlaut des KI-Hinweises</label>
       <textarea id="abg-ki-text" rows="2"></textarea>
       <div class="abg-hinweis">Wird beim Eintragen angehängt, nicht von der KI geschrieben. Leeres Feld stellt den Standardsatz wieder her. Ist das Feedback als HTML geschrieben, wird der Hinweis klein und grau angehängt, sonst als Klartext.</div>
+      <label>Kürzel-Karte (Zuordnung Person → Kürzel-ID)</label>
+      <div class="abg-mleiste">
+        <button class="abg-sekundaer" id="abg-k-export">Sichern</button>
+        <button class="abg-sekundaer" id="abg-k-import">Einlesen</button>
+      </div>
+      <input type="file" id="abg-k-datei" accept=".json,application/json" style="display:none">
+      <div class="abg-hinweis" id="abg-k-stand"></div>
+      <div class="abg-hinweis">Die Karte hält fest, welche Person welches Kürzel hat. Geht sie verloren, vergibt die Erweiterung alle Nummern neu und sie passen nicht mehr zum Archiv. <strong>Nach jeder Runde einmal sichern.</strong> Die Datei enthält Klarnamen — sie gehört nicht in den Ordner, den die KI liest.</div>
       <button class="abg-sekundaer" id="abg-reset">Stand dieser Aufgabe zurücksetzen</button>
       <div class="abg-hinweis">Zurücksetzen vergisst, was beim letzten Lauf schon geladen war — der nächste Durchlauf holt dann wieder alles. Nötig, wenn der Output-Ordner verloren gegangen ist.</div>
       <button class="abg-sekundaer" id="abg-einst-speichern">Einstellungen speichern</button>
@@ -976,6 +1038,49 @@ export function starteGrader() {
       await storageRemove(['abgStand_' + cmid]);
       logZeile(body, 'Stand zurückgesetzt — der nächste Download holt wieder alle Abgaben.', 'ok');
     });
+    const kStand = panelEinstellungen.querySelector('#abg-k-stand');
+    const kStandZeigen = async () => {
+      const fund = await kuerzelKarteFinden();
+      const n = Object.keys(fund.karte).length;
+      kStand.textContent = n
+        ? `Gespeichert: ${n} Kürzel unter "${fund.herkunft}".`
+        : 'Für diesen Kurs ist noch keine Kürzel-Karte gespeichert.';
+    };
+    kStandZeigen();
+
+    panelEinstellungen.querySelector('#abg-k-export').addEventListener('click', async () => {
+      const fund = await kuerzelKarteFinden();
+      if (!Object.keys(fund.karte).length) { logZeile(body, 'Es gibt noch keine Kürzel-Karte zum Sichern.', 'fehler'); return; }
+      const inhalt = { typ: 'moodle-ai-aufgaben-grader/kuerzel', version: 1,
+        schluessel: fund.herkunft, gesichert: new Date().toISOString().slice(0, 10), karte: fund.karte };
+      download(new Blob([JSON.stringify(inhalt, null, 2)], { type: 'application/json' }),
+        `kuerzel-karte_${fund.herkunft}.json`);
+      logZeile(body, `Kürzel-Karte gesichert: ${Object.keys(fund.karte).length} Personen. Gut aufheben — sie enthält Klarnamen.`, 'ok');
+    });
+
+    panelEinstellungen.querySelector('#abg-k-import').addEventListener('click', () => {
+      panelEinstellungen.querySelector('#abg-k-datei').click();
+    });
+    panelEinstellungen.querySelector('#abg-k-datei').addEventListener('change', (ev) => {
+      const f = ev.target.files && ev.target.files[0];
+      if (!f) return;
+      const leser = new FileReader();
+      leser.onload = async () => {
+        try {
+          const o = JSON.parse(String(leser.result));
+          const karte = o && o.karte ? o.karte : o;
+          const eintraege = Object.entries(karte || {})
+            .filter(([uid, e]) => uid && e && e.kuerzel);
+          if (!eintraege.length) throw new Error('Darin steckt keine Kürzel-Karte.');
+          const ziel = courseKeyKandidaten()[0];
+          await kuerzelKarteSpeichern(ziel, Object.fromEntries(eintraege));
+          logZeile(body, `Kürzel-Karte eingelesen: ${eintraege.length} Personen, gespeichert unter "${ziel}". Sie ersetzt die bisherige.`, 'ok');
+          kStandZeigen();
+        } catch (e) { logZeile(body, 'Datei nicht lesbar: ' + e.message, 'fehler'); }
+      };
+      leser.readAsText(f);
+    });
+
     panelEinstellungen.querySelector('#abg-einst-speichern').addEventListener('click', async () => {
       einst.ordner = panelEinstellungen.querySelector('#abg-ordner').value.trim();
       einst.skill = panelEinstellungen.querySelector('#abg-skill').value.trim();
@@ -1170,7 +1275,8 @@ export function starteGrader() {
     if (!teilnehmer.length) { logZeile(body, 'Keine abgegebenen Abgaben gefunden.', 'fehler'); return; }
     logZeile(body, `${teilnehmer.length} Abgabe(n) erkannt.`);
 
-    const karte = await kuerzelZuweisen(courseKey, teilnehmer.map((t) => ({ userid: t.userid, name: t.name })));
+    const karte = await kuerzelZuweisen(courseKey, teilnehmer.map((t) => ({ userid: t.userid, name: t.name })),
+      (text, art) => logZeile(body, text, art));
 
     const garnichts = teilnehmer.filter((t) => t.ohneAbgabe);
     if (garnichts.length) {

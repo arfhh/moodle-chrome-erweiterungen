@@ -16,8 +16,8 @@ liest die **Antwort als JSON** wieder ein — welchen Chat du benutzt, entscheid
 |---|---|---|---|
 | **Moodle AI Grader** · [Quelltext](moodle-ai-grader/) | 3.1.0 | **[⬇ ZIP](https://github.com/arfhh/moodle-chrome-erweiterungen/raw/main/dist/moodle-ai-grader.zip)** | **Klausuren** mit mehreren Aufgaben in einer Freitextfrage: legt Erwartungshorizont und Antwortvorlage in der Frage an, erzeugt Bewertungs-Prompts, rechnet die Punkte und trägt sie mit begründetem Feedback zurück |
 | **Moodle AI Reviewer** · [Quelltext](moodle-ai-reviewer/) | 1.5.9 | **[⬇ ZIP](https://github.com/arfhh/moodle-chrome-erweiterungen/raw/main/dist/moodle-ai-reviewer.zip)** | **Nachbewerten**: findet frei eingetippte Antworten (Cloze-Lücken, Kurzantwort, Numerisch), die Moodle nicht erkannt hat, und trägt Punkte und Feedback nach |
-| **Moodle AI Coach** · [Quelltext](moodle-ai-coach/) | 1.8.3 | **[⬇ ZIP](https://github.com/arfhh/moodle-chrome-erweiterungen/raw/main/dist/moodle-ai-coach.zip)** | **Kurze Freitextantworten** (2–3 Sätze): liest den Erwartungshorizont aus der Frage, bewertet und gibt Sprachfeedback |
-| **Moodle AI Aufgaben-Grader** · [Quelltext](moodle-ai-aufgaben-grader/) | 1.3.3 | **[⬇ ZIP](https://github.com/arfhh/moodle-chrome-erweiterungen/raw/main/dist/moodle-ai-aufgaben-grader.zip)** | **Datei-Abgaben** im Aufgabenmodul: lädt die Abgaben anonymisiert als ZIP, erkennt was seit dem letzten Mal neu oder geändert ist, und trägt Feedback und Punkte über Moodles Schnellbewertung zurück |
+| **Moodle AI Coach** · [Quelltext](moodle-ai-coach/) | 1.8.7 | **[⬇ ZIP](https://github.com/arfhh/moodle-chrome-erweiterungen/raw/main/dist/moodle-ai-coach.zip)** | **Kurze Freitextantworten** (2–3 Sätze): liest den Erwartungshorizont aus der Frage, bewertet und gibt Sprachfeedback |
+| **Moodle AI Aufgaben-Grader** · [Quelltext](moodle-ai-aufgaben-grader-wxt/) | 1.7.0 | **[⬇ ZIP](https://github.com/arfhh/moodle-chrome-erweiterungen/raw/main/dist/moodle-ai-aufgaben-grader.zip)** | **Datei-Abgaben** im Aufgabenmodul: lädt die Abgaben anonymisiert als ZIP, erkennt was seit dem letzten Mal neu oder geändert ist, und trägt Feedback und Punkte über Moodles Schnellbewertung zurück. Als einzige auch für **Firefox und Edge** gebaut |
 | **Moodle Cloze Autofill** · [Quelltext](moodle-cloze-autofill/) | 2.0.4 | **[⬇ ZIP](https://github.com/arfhh/moodle-chrome-erweiterungen/raw/main/dist/moodle-cloze-autofill.zip)** | **Fragensammlung pflegen**: trägt neue Antwortvarianten in Cloze-Lücken ein, statt Frage für Frage von Hand |
 | **Moodle Notenstufen Autofill** · [Quelltext](notenstufen-extension/) | 2.7.0 | **[⬇ ZIP](https://github.com/arfhh/moodle-chrome-erweiterungen/raw/main/dist/notenstufen-extension.zip)** | **Notenstufen-Tabelle** eines Kurses auf einen Klick ausfüllen |
 
@@ -48,6 +48,12 @@ Chrome kennt diese Erweiterungen nicht aus dem Web Store — sie werden als
 5. **Entpackte Erweiterung laden** anklicken und den Ordner auswählen, in dem
    `manifest.json` direkt liegt (also z. B. `moodle-ai-reviewer`, nicht den
    übergeordneten Ordner).
+
+> **Der Aufgaben-Grader ist anders verpackt.** Sein ZIP enthält je einen fertigen
+> Ordner für Chrome, Firefox und Edge. Nimm für Chrome
+> `Erweiterung/moodle-ai-aufgaben-grader-chrom`. Der Ordnername ist Teil der
+> Kennung, unter der Chrome die gespeicherten Daten führt — wird er umbenannt
+> oder verschoben, sind Maßstab, Einstellungen und Kürzel-Karte weg.
 
 Mehrere Erweiterungen lassen sich gleichzeitig laden; sie kommen sich nicht in die
 Quere. Grader und Reviewer liegen zwar auf derselben Moodle-Seite, zeigen ihr Panel
