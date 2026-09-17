@@ -4,11 +4,12 @@
 # Aufruf:  bash "zips-bauen.sh"
 set -e
 REPO="$(cd "$(dirname "$0")" && pwd)"
-# Der Aufgaben-Grader steht NICHT in dieser Liste: er wird mit WXT gebaut und
-# bringt sein eigenes Paketierskript mit
-#   (moodle-ai-aufgaben-grader-wxt: npm run paket).
-# Es schreibt dieselbe dist/moodle-ai-aufgaben-grader.zip.
-NAMEN="moodle-ai-grader moodle-ai-reviewer moodle-ai-coach moodle-cloze-autofill notenstufen-extension"
+# Aufgaben-Grader UND Coach stehen NICHT in dieser Liste: beide werden mit WXT
+# gebaut und bringen ihr eigenes Paketierskript mit
+#   (moodle-ai-aufgaben-grader-wxt: npm run paket, moodle-ai-coach-wxt: npm run paket).
+# Beide schreiben dieselben Dateinamen wie bisher: dist/moodle-ai-aufgaben-grader.zip
+# bzw. dist/moodle-ai-coach.zip.
+NAMEN="moodle-ai-grader moodle-ai-reviewer moodle-cloze-autofill notenstufen-extension"
 
 # zip kann nicht in jeden gemounteten Ordner schreiben (Temp-Datei + Umbenennen).
 # Deshalb ausserhalb bauen und hineinkopieren.

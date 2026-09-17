@@ -195,6 +195,73 @@ Am 28.08.2026 lesend am Hamburg-LMS verifiziert:
 Ein Trockenlauf mit genau dieser Logik ergab an einer echten Frage: 36 Felder,
 `sesskey` dabei, `cancel` nicht dabei, keine `undefined`-Werte, POST ≈ 3,9 KB.
 
+## WXT-Umstellung (17.09.2026)
+
+Ab dieser Fassung wird der Coach mit **WXT** gebaut (siehe Skill `1-browser-wxt`) — eine
+Codebasis, drei Browser (Chrome, Firefox, Edge). Der fachliche Kern liegt in
+`lib/coach-core.js` und ist zeilengleich mit der bewaehrten `content.js` bis 1.8.10;
+einzige Aenderungen: `chrome.*` -> `browser.*` (Polyfill), IIFE -> `export function
+starteCoach()`, Versionsnummer per `textContent` statt Einsetzung ins `innerHTML`.
+
+Befehle: `npm run dev` (Chrome-Testlauf), `npm run build-all` (alle drei Browser),
+`npm run paket` (baut, benennt um, packt zu `dist/moodle-ai-coach.zip`). Details in
+`1-browser-wxt`.
+
+## Stand 1.8.10
+
+**1.8.10** — **Knopf „Alle eintragen" wird zu „Erneut versuchen", solange etwas offen
+  bleibt.** Ergänzung zu 1.8.9 (Arne, 17.09.2026): Auch mit der automatischen
+  Wiederholung kann nach 3 Runden noch etwas offen bleiben — der Knopf sagt das jetzt
+  selbst, statt dass unklar bleibt, ob ein erneuter Klick dasselbe nochmal macht. Zeigt
+  wieder „Alle eintragen", sobald ein Durchlauf ohne Fehler war.
+
+## Stand 1.8.9
+
+**1.8.9** — **„Eintragen" wiederholt fehlgeschlagene Einträge jetzt selbst, statt
+  dass mehrfach geklickt werden muss.** Auslöser (Arne, 17.09.2026): teils bis zu
+  5 Klicks auf „Alle eintragen" nötig, bis wirklich alles stand — verunsichert schon
+  beim ersten Fehlschlag.
+  - Ursache: dieselbe Moodle-seitige Anzeige-Unregelmäßigkeit wie beim Ernten
+    (1.8.6/1.8.7) — dieselbe Bewertungsseite liefert bei vielen Versuchen nicht
+    immer alle Felder zurück. Die eingebauten 8 Ladeversuche in
+    `seiteMitFeldernLaden` fangen das meistens ab, aber nicht immer.
+  - `eintragen()` sammelt jetzt fehlgeschlagene Einträge (`fehlgeschlagen`) statt
+    sie nur zu zählen. Neue Funktion `eintragenMitWiederholung()` ruft `eintragen()`
+    bei Fehlern automatisch bis zu 2× erneut auf — nur für die fehlgeschlagenen
+    Einträge, mit 1,5 s Pause dazwischen, damit Moodle nicht sofort wieder denselben
+    Zustand liefert. Der Knopf „Alle eintragen" ruft jetzt diese Funktion auf.
+  - Das Protokoll zeigt jede Runde („↻ Versuch 2/3: …"), die Kopfzeile nennt am Ende
+    „… · 2 Versuche gebraucht", falls mehr als einer nötig war — nachvollziehbar
+    statt stillschweigend.
+  - Bleibt ein Eintrag nach 3 Runden fehlgeschlagen, erscheint er wie bisher im
+    Protokoll — ein manueller erneuter Klick auf „Alle eintragen" bleibt möglich.
+  - Noch nicht in Chrome getestet — vor dem produktiven Einsatz: Fassung in den
+    Chrome-Ordner kopieren, neu laden, an einem Kurztest mit vielen Zufallsfragen-
+    Versuchen gegenprüfen (genau dort trat der Fehler auf).
+
+## Stand 1.8.8
+
+**1.8.8** — **Punkteklammer im Feedback nennt jetzt konkrete Zahlen statt
+  Abstraktionen, höchste Fehlerstufe bekommt einen festen Hinweissatz.** Auslöser
+  (Arne, 17.09.2026): Bei einem sehr fehlerhaften Satz stand im Feedback nur eine
+  einzelne, leicht behebbare Korrektur und „(−0,10 Punkte)" — beides zu abstrakt,
+  um zu vermitteln, wie ernst die Lage ist.
+  - Inhalt-Zeile zeigt jetzt „(1,00 von 2,00 Punkten)" statt nur „(1,00 Punkte)".
+  - Abzug-Zeile zeigt die gezählten Fehlerpunkte statt nur den Punktabzug, z. B.
+    „(−0,10 Punkte — 1 Fehlerpunkt)" bis „(−0,60 Punkte — 5 oder mehr
+    Fehlerpunkte, höchste Stufe)".
+  - Ab der höchsten Fehlerstufe (5 oder mehr gewichtete Fehlerpunkte, siehe
+    „Die Rechnung") hängt die Erweiterung selbst — nicht die KI — einen festen
+    Satz an: dass das mehrere grundlegende Fehler sind und das bis zum Abitur
+    sicher sitzen muss. Das Feld „grammatik"/„rechtschreibung" der KI bleibt wie
+    gehabt auf höchstens zwei Korrekturen begrenzt (2-didaktik-bewertung); der
+    Hinweissatz ersetzt das nicht, er ordnet nur die Schwere ein.
+  - Rein im Plugin gerechnet (`rueckmeldungHtml`), keine Prompt-Änderung, kein
+    neues JSON-Feld, keine zusätzlichen Token.
+  - Noch nicht in Chrome getestet — vor dem produktiven Einsatz: Fassung in den
+    Chrome-Ordner kopieren, neu laden, an einer echten Antwort mit vielen
+    Sprachfehlern gegenprüfen.
+
 ## Stand 1.8.7
 
 **1.8.7** — **Noch ein Versuch entging der Sammel-Logik aus 1.8.6 — Parallelität

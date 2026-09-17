@@ -1,4 +1,10 @@
-/* Moodle AI Coach v1.8.0 — Bewertung kurzer Freitextantworten.
+/* Moodle AI Coach — Kern, aus content.js v1.8.10 uebernommen (WXT-Umzug 17.09.2026).
+ * Genau vier Aenderungen beim Umzug, wie beim Aufgaben-Grader:
+ *  1. chrome.* -> browser.*        (Polyfill, Chrome UND Firefox)
+ *  2. Skill-Verweis 1-chrome-mv3 -> 1-webext-robustheit
+ *  3. IIFE -> export function starteCoach()
+ *  4. Versionsnummer per textContent statt Einsetzung ins innerHTML
+ * Sonst ist die Datei zeilengleich mit der bewaehrten Fassung.
  *
  * Arbeitsteilung der drei Erweiterungen (Stand 05.09.2026):
  *   Grader   blau,    top 80px, Einzelfrageseite (slot=)        — EINE Freitextaufgabe mit Teilaufgaben
@@ -15,13 +21,15 @@
  *
  * A. Spielhoff · CC BY-SA 4.0
  */
-(function () {
+import { browser } from 'wxt/browser';
+
+export function starteCoach() {
   'use strict';
 
   // Versionsnummer aus dem Manifest — sie steht in der Kopfzeile des Panels, damit
   // nach "↺ neu laden" sofort sichtbar ist, welche Fassung wirklich aktiv ist.
   // Aus dem Manifest gelesen, nie von Hand gepflegt: so kann sie nicht auseinanderlaufen.
-  const VERSION = (chrome.runtime.getManifest ? chrome.runtime.getManifest().version : '');
+  const VERSION = (browser.runtime.getManifest ? browser.runtime.getManifest().version : '');
 
   const P = new URLSearchParams(location.search);
   if (P.get('mode') !== 'grading') return;
@@ -85,10 +93,17 @@
     // Schülerin/den Schüler unterscheidbar bleiben. Kursiv, grau, in Klammern, am
     // Zeilenende. Der Abzug steht EINMAL GESAMT hinter der letzten Sprachzeile, nicht
     // je Kategorie — er wird aus der Gesamtfehlerzahl berechnet, nicht pro Zeile.
+    // Seit 1.8.8: die Klammer nennt konkrete Zahlen statt Abstraktionen — die
+    // Maximalpunktzahl bei Inhalt, die gezählten Fehlerpunkte beim Abzug — und ab der
+    // höchsten Fehlerstufe (5+ Fehlerpunkte) folgt ein fester Hinweissatz zur
+    // Dringlichkeit. Nicht von der KI generiert, siehe TEIL-2-Prompt weiter unten.
     const vorhandeneKoepfe = teile.map(([k]) => k);
     const letzteSprachzeile = vorhandeneKoepfe.includes('Grammatik') ? 'Grammatik'
       : (vorhandeneKoepfe.includes('Rechtschreibung') ? 'Rechtschreibung' : null);
     const punktSpan = (t) => '<span style="color:#767676;font-style:italic;"> (' + t + ')</span>';
+    const hoechsteStufe = !!(punkte && punkte.gewicht >= 5);
+    const fehlerpunkteText = (n) => n >= 5 ? '5 oder mehr Fehlerpunkte'
+      : (n === 1 ? '1 Fehlerpunkt' : n + ' Fehlerpunkte');
 
     let html = '<p><strong><u>Feedback</u></strong></p>';
     if (lob) html += '<p>' + escapeHtml(lob) + '</p>';
@@ -96,9 +111,13 @@
       let zusatz = '';
       if (punkte) {
         if (kopf === 'Inhalt' && punkte.inhalt != null) {
-          zusatz = punktSpan(komma(punkte.inhalt) + ' Punkte');
+          zusatz = punktSpan(punkte.inhaltMax != null
+            ? komma(punkte.inhalt) + ' von ' + komma(punkte.inhaltMax) + ' Punkten'
+            : komma(punkte.inhalt) + ' Punkte');
         } else if (kopf === letzteSprachzeile && punkte.abzug) {
-          zusatz = punktSpan('−' + komma(punkte.abzug) + ' Punkte');
+          zusatz = punktSpan('−' + komma(punkte.abzug) + ' Punkte'
+            + (punkte.gewicht != null ? ' — ' + fehlerpunkteText(punkte.gewicht)
+              + (hoechsteStufe ? ', höchste Stufe' : '') : ''));
         }
       }
       html += '<p><u>' + kopf + ':</u> ' + escapeHtml(text) + zusatz + '</p>';
@@ -107,6 +126,15 @@
       // beim Sprachmodell und ist woertlich das, was die Lehrkraft hinterlegt hat.
       if (kopf === 'Inhalt' && muster) {
         html += '<p><u>So hättest du es schreiben können:</u> ' + escapeHtml(muster) + '</p>';
+      }
+      // Fester, nicht von der KI generierter Hinweis — nur bei der höchsten
+      // Fehlerstufe, sonst nutzt er sich ab. Direkt hinter der Sprachzeile, mit der
+      // die Stufe erreicht wurde.
+      if (kopf === letzteSprachzeile && hoechsteStufe) {
+        html += '<p>Das sind mehrere grundlegende Fehler in einem einzigen Satz, nicht nur '
+          + 'Kleinigkeiten — das ist auf unserer Skala die höchste Fehlerstufe. Bis zum '
+          + 'Abitur in zwei bis drei Jahren musst du das sicher beherrschen. Arbeite gezielt '
+          + 'daran.</p>';
       }
     });
     return html;
@@ -274,7 +302,7 @@
   function optionenLaden() {
     return new Promise((resolve) => {
       try {
-        chrome.storage.local.get(['coachOptionen'], (r) => {
+        browser.storage.local.get(['coachOptionen'], (r) => {
           optionen = { ...OPT_STANDARD, ...(r && r.coachOptionen ? r.coachOptionen : {}) };
           resolve(optionen);
         });
@@ -284,7 +312,7 @@
   function optionenSpeichern(neu) {
     optionen = { ...optionen, ...neu };
     return new Promise((resolve) => {
-      try { chrome.storage.local.set({ coachOptionen: optionen }, resolve); }
+      try { browser.storage.local.set({ coachOptionen: optionen }, resolve); }
       catch (e) { resolve(); }
     });
   }
@@ -626,6 +654,10 @@
   async function eintragen(liste, kiHinweis, onLog, onProgress) {
     const gruppen = gruppieren(liste);
     let ok = 0, fehler = 0, fertig = 0;
+    // Seit 1.8.8: Fehlgeschlagenes wird gesammelt, nicht nur gezaehlt — so kann
+    // eintragenMitWiederholung() gezielt nur diese Eintraege erneut versuchen,
+    // statt dass Arne selbst mehrfach auf „Eintragen" klicken muss.
+    const fehlgeschlagen = [];
     for (const g of gruppen) {
       try {
         const url = seiteUrl(g.slot, g.qid, 'all');
@@ -635,7 +667,8 @@
         const gesetzt = [];
         g.eintraege.forEach((e) => {
           if (!felder.has(e.markfeld)) {
-            fehler++; onLog(`✗ Punktefeld nicht auf der Seite — ${e.frage}`, versuchLink(e));
+            fehler++; fehlgeschlagen.push(e);
+            onLog(`✗ Punktefeld nicht auf der Seite — ${e.frage}`, versuchLink(e));
             return;
           }
           felder.set(e.markfeld, komma(e.punkte));
@@ -688,7 +721,7 @@
             if (!ausstehend.includes(e)) {
               ok++; onLog(`✓ ${e.frage} — ${komma(e.punkte)} von ${komma(e.max)}`, versuchLink(e));
             } else {
-              fehler++;
+              fehler++; fehlgeschlagen.push(e);
               const ist = bestaetigtBei.get(e);
               onLog(`✗ ${e.frage} — steht auf ${ist == null ? 'keinem Wert' : komma(ist)} `
                   + `statt ${komma(e.punkte)}`, versuchLink(e));
@@ -697,11 +730,39 @@
         }
       } catch (e) {
         fehler += g.eintraege.length;
+        fehlgeschlagen.push(...g.eintraege);
         onLog(`✗ ${g.eintraege[0].frage}: ${e.message}`);
       }
       fertig++; onProgress(fertig, gruppen.length);
     }
-    return { ok, fehler, gruppen: gruppen.length };
+    return { ok, fehler, gruppen: gruppen.length, fehlgeschlagen };
+  }
+
+  // Wiederholt automatisch nur die fehlgeschlagenen Eintraege, statt dass Arne
+  // selbst mehrfach auf „Eintragen" klicken muss (gemeldet 17.09.2026: bis zu
+  // 5 Klicks noetig). Dieselbe Moodle-seitige Anzeige-Unregelmaessigkeit, die
+  // schon in seiteMitFeldernLaden abgefangen wird (dieselbe URL liefert bei
+  // vielen Versuchen nicht immer alle Felder), tritt manchmal auch nach den
+  // eingebauten 8 Ladeversuchen noch auf — ein zeitversetzter, kompletter neuer
+  // Durchlauf faengt das meist ab. 1,5 s Pause zwischen den Runden geben Moodle
+  // Zeit, statt sofort erneut auf denselben Zustand zu treffen.
+  const EINTRAGEN_WIEDERHOLUNGEN = 3;
+
+  async function eintragenMitWiederholung(liste, kiHinweis, onLog, onProgress) {
+    let rest = liste;
+    let ok = 0, gruppen = 0, versuche = 0;
+    for (let v = 1; v <= EINTRAGEN_WIEDERHOLUNGEN && rest.length; v++) {
+      versuche = v;
+      if (v > 1) {
+        onLog(`↻ Versuch ${v}/${EINTRAGEN_WIEDERHOLUNGEN}: ${rest.length} `
+          + `Eintrag/Einträge erneut …`);
+        await warte(1500);
+      }
+      const r = await eintragen(rest, kiHinweis, onLog, onProgress);
+      ok += r.ok; gruppen += r.gruppen;
+      rest = r.fehlgeschlagen;
+    }
+    return { ok, fehler: rest.length, gruppen, versuche };
   }
 
   /* ================= Zurückschreiben: Erwartungshorizont ================= */
@@ -1326,7 +1387,7 @@ ${DATEN_PLATZHALTER}`;
   knopf.title = 'Moodle AI Coach';
   try {
     const bild = document.createElement('img');
-    bild.src = chrome.runtime.getURL('icons/icon128.png');
+    bild.src = browser.runtime.getURL('icon/128.png');
     bild.alt = 'AI Coach';
     bild.className = 'co-fab-icon';
     bild.addEventListener('error', () => { bild.remove(); knopf.textContent = 'Co'; });
@@ -1337,7 +1398,7 @@ ${DATEN_PLATZHALTER}`;
   const panel = el('div', 'co-panel co-hidden');
   panel.innerHTML = `
     <div class="co-head">
-      <span class="co-title">AI Coach ${VERSION}</span>
+      <span class="co-title">AI Coach <span class="co-version"></span></span>
       <button class="co-close" title="Schließen">✕</button>
     </div>
     <div class="co-tabs">
@@ -1476,6 +1537,7 @@ ${DATEN_PLATZHALTER}`;
       <p class="co-optinfo co-hidden"></p>
     </div>`;
   document.body.appendChild(panel);
+  panel.querySelector('.co-version').textContent = VERSION;
 
   const $ = (s) => panel.querySelector(s);
   let ausgabe = null, eintraege = null, horizonte = null;
@@ -1484,10 +1546,10 @@ ${DATEN_PLATZHALTER}`;
   // und Reiter 2 kann die Punkte nicht mehr rechnen — man müsste alles neu durchsuchen.
   const ERNTE_KEY = 'coachErnte_' + CMID;
   function ernteSichern() {
-    try { chrome.storage.local.set({ [ERNTE_KEY]: ausgabe }); } catch (e) { /* egal */ }
+    try { browser.storage.local.set({ [ERNTE_KEY]: ausgabe }); } catch (e) { /* egal */ }
   }
   try {
-    chrome.storage.local.get([ERNTE_KEY], (r) => {
+    browser.storage.local.get([ERNTE_KEY], (r) => {
       const d = r && r[ERNTE_KEY];
       if (d && !ausgabe) {
         ausgabe = d;
@@ -1896,7 +1958,9 @@ ${DATEN_PLATZHALTER}`;
         // Alte Form („text" als fertiger Satz) bleibt gueltig, damit gespeicherte
         // eigene Prompts weiter funktionieren.
         const muster = inhalt < 100 ? kernaussage(frageDaten.horizont) : '';
-        const rmText = rueckmeldungHtml(e.rueckmeldung, muster, { inhalt: r.inhaltPunkte, abzug: r.abzugPunkte }) || String(e.text || '').trim();
+        const rmText = rueckmeldungHtml(e.rueckmeldung, muster,
+          { inhalt: r.inhaltPunkte, inhaltMax: a.max, abzug: r.abzugPunkte, gewicht: r.gewicht })
+          || String(e.text || '').trim();
         raus.push({
           ...a, inhalt, fehler: e.fehler || [], text: rmText,
           punkte: r.punkte, gewicht: r.gewicht, abzug: r.abzug,
@@ -1963,21 +2027,28 @@ ${DATEN_PLATZHALTER}`;
     try {
       const r = trocken
         ? await trockenlauf(eintraege, schreibLog, fortschritt)
-        : await eintragen(eintraege, $('.co-ki').checked, schreibLog, fortschritt);
+        : await eintragenMitWiederholung(eintraege, $('.co-ki').checked, schreibLog, fortschritt);
       log.prepend(el('div', 'co-logkopf', trocken
         ? `${r.ok} Felder gefunden · ${r.fehler} fehlen · ${r.gruppen} Seiten geprüft`
-        : `${r.ok} eingetragen und geprüft · ${r.fehler} fehlgeschlagen · ${r.gruppen} Seiten`));
+        : `${r.ok} eingetragen und geprüft · ${r.fehler} fehlgeschlagen · ${r.gruppen} Seiten`
+          + (r.versuche > 1 ? ` · ${r.versuche} Versuche gebraucht` : '')));
       abschluss.classList.remove('co-hidden');
       if (r.fehler > 0) {
         abschluss.className = 'co-abschluss co-abfehler';
         abschluss.textContent = trocken
           ? `⚠ ${r.fehler} Feld/Felder fehlen. Trag noch nichts ein — stammt das JSON zu diesem Durchlauf?`
           : `⚠ ${r.fehler} Eintrag/Einträge sind nicht angekommen. Sieh sie im Protokoll nach.`;
+        // Seit 1.8.10: der Knopf selbst sagt, dass noch etwas fehlt — ein Klick
+        // genuegt zum erneuten Versuch, statt nur "Alle eintragen" zu lesen und
+        // sich zu fragen, ob das dasselbe nochmal macht (Arne, 17.09.2026: schon
+        // ein einziger Fehlschlag verunsichert).
+        if (!trocken) $('.co-alle').textContent = 'Erneut versuchen';
       } else {
         abschluss.className = 'co-abschluss co-abok';
         abschluss.textContent = trocken
           ? `✓ Alles vorhanden — ${r.ok} Felder auf ${r.gruppen} Seiten. Du kannst eintragen.`
           : `✓ Fertig — ${r.ok} Einträge auf ${r.gruppen} Seiten, keine Fehler.`;
+        if (!trocken) $('.co-alle').textContent = 'Alle eintragen';
         // Ohne Fehler gibt es nichts mehr nachzusehen: das Panel schließt sich selbst,
         // damit das Ende sichtbar ist. Mit Fehlern bleibt es offen — sonst verschwände
         // genau die Zeile, die man lesen muss. Ein Klick ins Panel bricht ab.
@@ -2026,13 +2097,13 @@ ${DATEN_PLATZHALTER}`;
     return f ? f.value.trim() : '';
   }
   try {
-    chrome.storage.local.get([WUNSCH_KEY], (r) => {
+    browser.storage.local.get([WUNSCH_KEY], (r) => {
       const t = r && r[WUNSCH_KEY];
       if (t && !aenderungsWunsch()) panel.querySelector('.co-hwunsch').value = t;
     });
   } catch (e) { /* egal */ }
   panel.querySelector('.co-hwunsch').addEventListener('input', () => {
-    try { chrome.storage.local.set({ [WUNSCH_KEY]: aenderungsWunsch() }); } catch (e) { /* egal */ }
+    try { browser.storage.local.set({ [WUNSCH_KEY]: aenderungsWunsch() }); } catch (e) { /* egal */ }
   });
 
   function hcopyBeschriften() {
@@ -2166,4 +2237,4 @@ ${DATEN_PLATZHALTER}`;
     box.appendChild(ja);
     ja.addEventListener('click', () => { box.classList.add('co-hidden'); horizontLauf(false); });
   });
-})();
+}
