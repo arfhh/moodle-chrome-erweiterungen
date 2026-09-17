@@ -6,12 +6,18 @@ export default defineConfig({
   // 'Erweiterung' statt 'build': npm run paket benennt die Browser-Unterordner darin nach
   // Veroeffentlichungsnamen um und packt sie mit README zu dist/<name>.zip (Arne, 17.09.2026).
   outDir: 'Erweiterung',
+  // Gebaut wird direkt in den Ordner, der auch geladen wird. Kein chrome-mv3
+  // daneben, das man versehentlich laedt oder vergisst nachzuziehen.
+  // Die Schreibweise "chrom" bleibt: Chrome leitet bei einer entpackten
+  // Erweiterung die ID aus dem PFAD ab — ein anderer Ordnername heisst neue ID
+  // und damit leerer Speicher, also Massstab und Einstellungen weg.
+  outDirTemplate: 'moodle-ai-aufgaben-grader-{{browser}}',
   // Firefox baut WXT sonst als MV2. Wir erzwingen ueberall MV3, damit nicht
   // zwei strukturell verschiedene Manifeste entstehen (1-browser-wxt, Abschnitt 4).
   manifestVersion: 3,
   manifest: {
     name: 'Moodle AI Aufgaben-Grader',
-    version: '1.5.0',
+    version: '1.6.6',
     description:
       'Laedt anonymisierte Datei-Abgaben aus dem Aufgaben-Modul als ZIP herunter, erzeugt den passenden KI-Auftrags-Prompt und traegt Note und Feedback aus einer CSV-Datei automatisch in Moodle ein.',
     permissions: ['storage'],

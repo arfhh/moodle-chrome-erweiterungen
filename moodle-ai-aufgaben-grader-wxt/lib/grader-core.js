@@ -9,7 +9,7 @@ import { browser } from 'wxt/browser';
 
 /*
  * Moodle AI Aufgaben-Grader — content.js
- * Version 1.5.0
+ * Version 1.6.6
  *
  * Erscheint im Aufgaben-Modul (mod/assign) in der Bewerten-Ansicht:
  *  - action=grading  → Übersichtstabelle: Abgaben anonymisiert als ZIP + CSV
@@ -218,7 +218,20 @@ export function starteGrader() {
 
   // Nimmt rohen Text an: reines JSON, oder JSON in einem Codeblock, oder
   // JSON mitten in einer KI-Antwort. Sonst muesste Arne von Hand ausschneiden.
-  function massstabLesen(text) {
+  // Hoechstgewicht einer Wahlaufgabe. Sie ist freiwillig und darf die
+  // Pflichtaufgaben nicht ueberwiegen.
+  const WAHL_MAX = 4;
+
+  // gekappt: optionale Liste, die der Aufrufer mitgibt und danach auslesen
+  // kann. Nichts davon haengt am Massstab selbst — sonst landete es in der
+  // gespeicherten Datei.
+  // Stillschweigend aendern waere schlimmer als gar nicht kappen — also sagen.
+  function meldeGekappt(body, gekappt) {
+    if (!gekappt || !gekappt.length) return;
+    logZeile(body, `Wahlaufgaben auf Gewicht ${WAHL_MAX} gekappt: ${gekappt.join(', ')} — die Zahl in Klammern kam von der KI.`, 'ok');
+  }
+
+  function massstabLesen(text, gekappt) {
     let t = String(text || '').trim();
     if (!t) throw new Error('Das Feld ist leer.');
     t = t.replace(/^```(?:json)?/i, '').replace(/```$/, '').trim();
@@ -236,6 +249,15 @@ export function starteGrader() {
       notiz: String(x && x.notiz != null ? x.notiz : '').trim(),
     })).filter((x) => x.name);
     if (!aufgaben.length) throw new Error('Keine Aufgabe hat einen Namen.');
+    // Der Prompt BITTET um hoechstens 4 fuer Wahlaufgaben — die KI haelt sich
+    // nicht zuverlaessig daran. Also hier erzwingen. Eine Bitte an ein
+    // Sprachmodell ist keine Regel (Arne, 17.09.2026).
+    aufgaben.forEach((a) => {
+      if (/wahlaufgabe/i.test(a.notiz) && a.gewicht > WAHL_MAX) {
+        if (gekappt) gekappt.push(`${a.name} (${a.gewicht})`);
+        a.gewicht = WAHL_MAX;
+      }
+    });
     return { typ: MASS_TYP, version: 1, erstellt: new Date().toISOString().slice(0, 10), aufgaben };
   }
 
@@ -258,11 +280,24 @@ export function starteGrader() {
   // Der Prompt fragt nach den AUFGABENBLAETTERN, nicht nach den Abgaben:
   // Die Lehrkraft hat sie, und nur wer sie liest, kann den Anspruch
   // einschaetzen. Seitenzahlen taugen dafuer nicht (Arne, 16.09.2026).
-  function massstabPromptErzeugen() {
+  // Sagt der KI, wo die Ordner auf dem Rechner liegen. Ohne diese Angabe fragt
+  // sie jedes Mal nach. Der Pfad ist bei jeder Lehrkraft anders, steht deshalb
+  // in den Einstellungen und nicht im Code (Arne, 17.09.2026).
+  function ortZeilen(z, einst) {
+    const pfad = (einst && einst.ordner || '').trim();
+    if (!pfad) return;
+    z.push(`Arbeitsordner auf meinem Rechner: ${pfad}`);
+    z.push('Darunter liegen die Unterordner Import, Output und Lösungen. Der Ort ist damit');
+    z.push('bekannt — bitte nicht noch einmal danach fragen.');
+    z.push('');
+  }
+
+  function massstabPromptErzeugen(einst) {
     const gefunden = blaetterAusAbgaben();
     const z = [];
     z.push('Bewertungsmassstab fuer eine Aufgabenserie erstellen.');
     z.push('');
+    ortZeilen(z, einst);
     z.push('Ich gebe dir gleich die Aufgabenblaetter dieser Serie (als Datei, Text oder Liste).');
     z.push('Bitte sieh sie durch und gewichte jede Aufgabe danach, wie viel Arbeit und welcher');
     z.push('Anspruch darin steckt — NICHT nach Seitenzahl. Fuenf Seiten mit sechs Luecken sind');
@@ -274,6 +309,9 @@ export function starteGrader() {
     z.push('');
     z.push('In "notiz" ein kurzer Grund. Ist eine Aufgabe eine WAHLAUFGABE, muss das Wort');
     z.push('"Wahlaufgabe" dort vorkommen — daran erkenne ich sie spaeter.');
+    z.push('');
+    z.push('WICHTIG: Eine Wahlaufgabe bekommt hoechstens das Gewicht 4, auch wenn sie viel');
+    z.push('Arbeit macht. Sie ist freiwillig und darf die Pflichtaufgaben nicht ueberwiegen.');
     z.push('');
     z.push('Antworte mit NICHTS als diesem JSON:');
     z.push('');
@@ -295,6 +333,102 @@ export function starteGrader() {
     return z.join('\n');
   }
 
+  // Zahl kuerzen: 10,10 -> 10,1  aber 15,15 bleibt 15,15 (Arne, 17.09.2026).
+  function zahl(n) {
+    // Der Punkt schuetzt die Stellen davor: "100.00" -> "100.", nicht "1".
+    return n.toFixed(2).replace(/0+$/, '').replace(/\.$/, '').replace('.', ',');
+  }
+
+  // Eine Zeile im Feedbackfeld der CSV, strukturiert:
+  //   Name|Vollstaendigkeit|Fachlichkeitsstufe|Datum|Text
+  //   !Kopfzeile|Flietext                      (Hinweis zum Arbeitsstand)
+  // Bewusst ohne JSON: keine geraden Anfuehrungszeichen, keine Semikolons —
+  // beides vertraegt die semikolongetrennte CSV nicht.
+  // Steht unter der Kopfzeile des laufenden Durchgangs, wenn dort sonst nichts
+  // stuende. Sonst sieht es aus wie ein Fehler (Arne, 17.09.2026).
+  const NICHTS_NEU = 'Seit dem letzten Feedback ist nichts Neues dazugekommen.';
+
+  function feedbackLesen(roh) {
+    const zeilen = String(roh || '').split(/\r?\n/).map((x) => x.trim()).filter(Boolean);
+    const blaetter = []; let stand = null; const frei = [];
+    let lauf = null;
+    zeilen.forEach((z) => {
+      if (z.startsWith('@')) { lauf = z.slice(1).trim(); return; }
+      if (z.startsWith('!')) {
+        const t = z.slice(1).split('|');
+        stand = { kopf: (t[0] || '').trim(), text: (t[1] || '').trim() };
+        return;
+      }
+      const t = z.split('|');
+      if (t.length >= 5 && /^\d+(\.\d+)?$/.test(t[1].trim()) && /^[0-3]$/.test(t[2].trim())) {
+        blaetter.push({ name: t[0].trim(), v: parseFloat(t[1]), f: parseInt(t[2], 10),
+                        datum: t[3].trim(), text: t.slice(4).join('|').trim() });
+      } else { frei.push(z); }
+    });
+    if (!lauf && blaetter.length) lauf = blaetter.map((b) => b.datum).sort().pop();
+    return { blaetter, stand, frei, lauf };
+  }
+
+  // Baut aus den Rohwerten das fertige HTML. Neuestes Datum oben, innerhalb
+  // eines Datums absteigend nach Bezeichnung. Der Stand-Hinweis steht direkt
+  // unter der obersten Kopfzeile — dort fangen die SuS an zu lesen.
+  function feedbackBauen(daten, faktoren, punkteJeBlatt) {
+    if (!daten.blaetter.length) {
+      const t = [];
+      // Auch ohne ein einziges Blatt gehoert die Datumszeile darueber.
+      if (daten.lauf) t.push(`<p><em><u>Feedback vom ${datumDeutsch(daten.lauf)}</u></em></p>`);
+      if (daten.stand) t.push(`<p><strong style='color:#c00'>${daten.stand.kopf}</strong><br>${daten.stand.text}</p>`);
+      else if (daten.lauf) t.push(`<p>${NICHTS_NEU}</p>`);
+      frei_dazu(t, daten.frei);
+      return t.join('\n');
+    }
+    const daten_nach = {};
+    daten.blaetter.forEach((b) => { (daten_nach[b.datum] = daten_nach[b.datum] || []).push(b); });
+    const datenListe = Object.keys(daten_nach).sort().reverse();
+    // Das Datum des laufenden Durchgangs bekommt IMMER eine Kopfzeile — auch
+    // wenn nichts Neues dazugekommen ist. Sonst stuende der Hinweis auf den
+    // Arbeitsstand unter einem alten Datum (Arne, 17.09.2026).
+    if (daten.lauf && datenListe[0] !== daten.lauf) datenListe.unshift(daten.lauf);
+    const aus = [];
+    datenListe.forEach((d, i) => {
+      aus.push(`<p><em><u>Feedback vom ${datumDeutsch(d)}</u></em></p>`);
+      if (i === 0 && daten.stand) {
+        aus.push(`<p><strong style='color:#c00'>${daten.stand.kopf}</strong><br>${daten.stand.text}</p>`);
+      } else if (!(daten_nach[d] || []).length) {
+        aus.push(`<p>${NICHTS_NEU}</p>`);
+      }
+      // Unterstrichen wird nur, was in DIESEM Durchgang dazugekommen ist.
+      const neu = (d === daten.lauf);
+      (daten_nach[d] || []).sort((a, b) => b.name.localeCompare(a.name, 'de', { numeric: true }));
+      (daten_nach[d] || []).forEach((b) => {
+        const fak = faktoren[b.f] != null ? faktoren[b.f] : 1;
+        const erg = b.v * fak;
+        const pk = punkteJeBlatt[b.name];
+        if (b.v <= 0) {
+          aus.push(`<p><strong style='color:#c00'>${b.name} — noch nicht bearbeitet</strong><br>${b.text}</p>`);
+          return;
+        }
+        const abzug = Math.round((1 - fak) * 100);
+        const teile = [`Vollständig ${zahl(b.v)} %`];
+        if (abzug > 0) teile.push(`Fachlich −${abzug} %`);
+        const rechts = pk != null
+          ? ` = ${zahl(pk * erg / 100)} von ${zahl(pk)} Punkten`
+          : ` = ${zahl(erg)} %`;
+        // Aeltere Bloecke ohne Unterstreichung: so sieht man auf einen Blick,
+        // was neu ist, nicht nur am Datum (Arne, 17.09.2026).
+        const titel = neu ? `<strong><u>${b.name}</u></strong>` : `<strong>${b.name}</strong>`;
+        aus.push(`<p>${titel} <small style='color:#777'>(${teile.join(' · ')}${rechts})</small><br>${b.text}</p>`);
+      });
+    });
+    frei_dazu(aus, daten.frei);
+    return aus.join('\n');
+  }
+  function frei_dazu(liste, frei) { frei.forEach((z) => liste.push(z)); }
+  function datumDeutsch(d) {
+    const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(d);
+    return m ? `${m[3]}.${m[2]}.${m[1]}` : d;
+  }
+
   const EINST_KEY = 'abgEinstellungen';
   // modus: 'schnell' = Voreinstellung. Unveränderte Abgaben werden gar nicht erst
   //                     geladen. Das ist gefahrlos, weil die Sicherung NICHT im
@@ -304,8 +438,22 @@ export function starteGrader() {
   //                     Moodle hat ihm schon einmal die Dateien einer Schülerin verloren).
   //         'backup'  = alles laden, alles ins ZIP. Für den ersten Lauf eines Themas,
   //                     nach einem Rechnerwechsel oder wenn der Output-Ordner fehlt.
-  const EINST_STANDARD = { skill: '', duplikate: true, loesungen: true, modus: 'schnell',
-    kiHinweis: true, kiHinweisText: KI_HINWEIS_STANDARD };
+  // Der Strenge-Regler bestimmt, wie hart ein fachlicher Mangel durchschlaegt.
+  // Die KI liefert nur die Stufe (0 bis 3), gerechnet wird HIER — deshalb
+  // aendert ein Zug am Regler alle Feedbacks, ohne neuen Durchlauf im Chat
+  // (Arne, 17.09.2026).
+  const STRENGE = {
+    nur_v:  { text: 'Nur Vollständigkeit — fachliche Mängel ziehen nichts ab', f: [1, 1, 1, 1] },
+    mild:   { text: 'Mild — 0 / −5 / −15 / −30 Prozent',                        f: [1, 0.95, 0.85, 0.70] },
+    normal: { text: 'Normal — 0 / −10 / −25 / −50 Prozent',                     f: [1, 0.90, 0.75, 0.50] },
+    streng: { text: 'Streng — 0 / −15 / −35 / −60 Prozent',                     f: [1, 0.85, 0.65, 0.40] },
+    fachlich: { text: 'Fachlich entscheidet — 0 / −20 / −50 / −100 Prozent', f: [1, 0.80, 0.50, 0] },
+  };
+  // Reihenfolge des Reglers: von links (nachsichtig) nach rechts (streng).
+  const STRENGE_FOLGE = ['nur_v', 'mild', 'normal', 'streng', 'fachlich'];
+
+  const EINST_STANDARD = { ordner: '', skill: '', duplikate: true, loesungen: true, modus: 'schnell',
+    kiHinweis: true, kiHinweisText: KI_HINWEIS_STANDARD, strenge: 'normal' };
 
   async function einstellungenLaden() {
     const d = await storageGet([EINST_KEY]);
@@ -577,6 +725,9 @@ export function starteGrader() {
     panelEinfuegen.innerHTML = hatSchnellbewertung ? `
       <label for="abg-csv">Ausgefüllte CSV (Kürzel-ID;Note;Feedback)</label>
       <input type="file" id="abg-csv" accept=".csv,text/csv">
+      <label for="abg-strenge">Gewichtung der Fachlichkeit</label>
+      <input type="range" id="abg-strenge" class="abg-regler" min="0" max="4" step="1">
+      <div class="abg-hinweis" id="abg-strenge-text"></div>
       <button id="abg-start" disabled>In die Tabelle eintragen</button>
       <div class="abg-hinweis">Trägt Note und Feedback in die Schnellbewertungs-Tabelle dieser Seite ein. Gespeichert wird nichts — du prüfst die Einträge und drückst danach selbst Moodles Knopf „Speichern".</div>
     ` : `
@@ -586,8 +737,29 @@ export function starteGrader() {
     `;
     body.appendChild(panelEinfuegen);
 
+
     // Reiter 3: Einstellungen — was in JEDEN Auftrags-Prompt übernommen wird.
     const einst = await einstellungenLaden();
+
+    // Regler setzen und bei jeder Bewegung sofort sichern. Beim naechsten
+    // Eintragen rechnet die Erweiterung damit — ohne neuen Lauf der KI.
+    const regler = panelEinfuegen.querySelector('#abg-strenge');
+    if (regler) {
+      const reglerText = panelEinfuegen.querySelector('#abg-strenge-text');
+      const reglerZeigen = () => {
+        const k = STRENGE_FOLGE[Number(regler.value)] || 'normal';
+        reglerText.textContent = STRENGE[k].text;
+      };
+      const i = STRENGE_FOLGE.indexOf(einst.strenge);
+      regler.value = String(i >= 0 ? i : STRENGE_FOLGE.indexOf('normal'));
+      reglerZeigen();
+      regler.addEventListener('input', reglerZeigen);
+      regler.addEventListener('change', async () => {
+        einst.strenge = STRENGE_FOLGE[Number(regler.value)] || 'normal';
+        await einstellungenSpeichern(einst);
+        logZeile(body, `Gewichtung gesetzt: ${STRENGE[einst.strenge].text}. Wirkt beim nächsten Eintragen.`, 'ok');
+      });
+    }
     // ---------------------------------------------------------------
     // Reiter "Maßstab" — wie stark jede Aufgabe in die Note eingeht.
     // Erzeugt wird er von der KI aus den Aufgabenblättern (die hat die
@@ -600,7 +772,8 @@ export function starteGrader() {
     panelMassstab.hidden = true;
     panelMassstab.innerHTML = `
       <div class="abg-hinweis abg-schritt" id="abg-m-stand"></div>
-      <button class="abg-sekundaer" id="abg-m-prompt">Prompt zum Erstellen erzeugen</button>
+      <button class="abg-sekundaer" id="abg-m-prompt">Prompt erzeugen und kopieren</button>
+      <textarea id="abg-m-prompt-text" rows="4" readonly placeholder="Hier steht nach dem Klick der Prompt — er liegt dann schon in der Zwischenablage."></textarea>
       <div class="abg-hinweis">Der Prompt fragt die KI nach allen Aufgaben dieser Serie und lässt sie gewichten. Die Antwort unten einfügen.</div>
       <label for="abg-m-text">Antwort der KI einfügen (oder fertigen Maßstab)</label>
       <textarea id="abg-m-text" rows="4" placeholder='{"aufgaben":[{"name":"...","gewicht":10,"notiz":"..."}]}'></textarea>
@@ -622,6 +795,21 @@ export function starteGrader() {
         return;
       }
       stand.textContent = `Maßstab für diese Aufgabe — ${massstab.aufgaben.length} Aufgaben, gespeichert am ${massstab.erstellt}.`;
+      // Die Prozentspalte und die Summe haengen am Gewicht und muessen sich
+      // beim Tippen mitbewegen. Frueher wurde dafuer die ganze Tabelle neu
+      // gebaut — dabei verschwand das Eingabefeld unter dem Cursor und nach
+      // der "1" landete die "0" im Nichts (Arne, 17.09.2026).
+      const prozZellen = [];
+      let fussSumme = null;
+      const werteAktualisieren = () => {
+        const neu = anteile(massstab.aufgaben);
+        prozZellen.forEach((td, k) => { td.textContent = proz(neu[k]) + ' %'; });
+        if (fussSumme) {
+          const su = massstab.aufgaben.reduce((x, y) => x + (Number(y.gewicht) || 0), 0);
+          fussSumme.textContent = String(Math.round(su * 10) / 10);
+        }
+      };
+
       const pr = anteile(massstab.aufgaben);
       const tab = document.createElement('table');
       tab.className = 'abg-mtab';
@@ -638,9 +826,10 @@ export function starteGrader() {
         zelle(nam);
         const gew = document.createElement('input'); gew.type = 'number'; gew.min = '0'; gew.step = '0.1';
         gew.value = String(a.gewicht); gew.className = 'abg-mgew';
-        gew.addEventListener('input', () => { a.gewicht = Number(gew.value) || 0; massstabZeichnen(); });
+        gew.addEventListener('input', () => { a.gewicht = Number(gew.value) || 0; werteAktualisieren(); });
         zelle(gew);
         const p = document.createElement('td'); p.className = 'abg-mproz'; p.textContent = proz(pr[i]) + ' %';
+        prozZellen.push(p);
         tr.appendChild(p);
         const no = document.createElement('input'); no.type = 'text'; no.value = a.notiz || '';
         no.addEventListener('input', () => { a.notiz = no.value; });
@@ -652,8 +841,9 @@ export function starteGrader() {
       });
       const fuss = document.createElement('tr'); fuss.className = 'abg-mfuss';
       const summe = massstab.aufgaben.reduce((x, y) => x + (Number(y.gewicht) || 0), 0);
-      [`Summe (${massstab.aufgaben.length})`, String(Math.round(summe * 10) / 10), '100,00 %', '', ''].forEach((t) => {
+      [`Summe (${massstab.aufgaben.length})`, String(Math.round(summe * 10) / 10), '100,00 %', '', ''].forEach((t, k) => {
         const td = document.createElement('td'); td.textContent = t; fuss.appendChild(td);
+        if (k === 1) fussSumme = td;
       });
       tab.appendChild(fuss);
       ziel.textContent = '';
@@ -672,6 +862,9 @@ export function starteGrader() {
         await massstabSpeichern(massstab);
         logZeile(body, `Maßstab gespeichert (${massstab.aufgaben.length} Aufgaben). Er bleibt für diese Aufgabe stehen.`, 'ok');
         massstabZeichnen();
+        // Nach dem Speichern ist der naechste Schritt der Download — also dorthin
+        // springen, statt den Reiter von Hand suchen zu lassen (Arne, 17.09.2026).
+        zeige('download');
       });
       knopf('Exportieren', 'abg-sekundaer', () => {
         const txt = JSON.stringify(massstab, null, 2);
@@ -700,14 +893,30 @@ export function starteGrader() {
       }
     }
 
-    panelMassstab.querySelector('#abg-m-prompt').addEventListener('click', () => {
-      zeigePrompt(panelMassstab, massstabPromptErzeugen());
+    panelMassstab.querySelector('#abg-m-prompt').addEventListener('click', (ev) => {
+      const knopf = ev.currentTarget;
+      const feld = panelMassstab.querySelector('#abg-m-prompt-text');
+      feld.value = massstabPromptErzeugen(einst);
+      const quittieren = (wort) => {
+        const alt = 'Prompt erzeugen und kopieren';
+        knopf.textContent = wort;
+        setTimeout(() => { knopf.textContent = alt; }, 1500);
+      };
+      navigator.clipboard.writeText(feld.value)
+        .then(() => quittieren('Kopiert'))
+        .catch(() => {
+          // Ohne Zwischenablage-Recht bleibt der Text markiert stehen.
+          feld.focus(); feld.select();
+          quittieren('Markiert — bitte selbst kopieren');
+        });
     });
     panelMassstab.querySelector('#abg-m-lesen').addEventListener('click', () => {
       try {
-        massstab = massstabLesen(panelMassstab.querySelector('#abg-m-text').value);
+        const gekappt = [];
+        massstab = massstabLesen(panelMassstab.querySelector('#abg-m-text').value, gekappt);
         panelMassstab.querySelector('#abg-m-text').value = '';
         logZeile(body, `Maßstab eingelesen: ${massstab.aufgaben.length} Aufgaben. Prüfen und dann speichern.`, 'ok');
+        meldeGekappt(body, gekappt);
         massstabZeichnen();
       } catch (e) { logZeile(body, 'Einlesen nicht möglich: ' + e.message, 'fehler'); }
     });
@@ -717,8 +926,10 @@ export function starteGrader() {
       const leser = new FileReader();
       leser.onload = () => {
         try {
-          massstab = massstabLesen(leser.result);
+          const gekappt = [];
+          massstab = massstabLesen(leser.result, gekappt);
           logZeile(body, `Maßstab aus Datei geladen: ${massstab.aufgaben.length} Aufgaben.`, 'ok');
+          meldeGekappt(body, gekappt);
           massstabZeichnen();
         } catch (e) { logZeile(body, 'Datei nicht lesbar: ' + e.message, 'fehler'); }
       };
@@ -731,6 +942,9 @@ export function starteGrader() {
     panelEinstellungen.dataset.panel = 'einstellungen';
     panelEinstellungen.hidden = true;
     panelEinstellungen.innerHTML = `
+      <label for="abg-ordner">Arbeitsordner auf deinem Rechner (optional)</label>
+      <input type="text" id="abg-ordner" placeholder="z. B. Moodle/Aufgaben">
+      <div class="abg-hinweis">Steht hier ein Pfad, schreiben ihn beide Prompts mit hinein — dann fragt die KI nicht mehr, wo die Ordner liegen. Leer lassen ist in Ordnung.</div>
       <label for="abg-skill">Bewertungs-Skill / Regelwerk (Name)</label>
       <input type="text" id="abg-skill" placeholder="z. B. 3-chemie-arbeitshefte">
       <div class="abg-hinweis">Die beiden Haken schalten nichts in der Erweiterung ein — sie bestimmen nur, welche Arbeitsschritte im erzeugten Prompt stehen, also was die KI tun soll.</div>
@@ -754,6 +968,7 @@ export function starteGrader() {
     panelEinstellungen.querySelector('#abg-skill').value = einst.skill || '';
     panelEinstellungen.querySelector('#abg-dupl').checked = !!einst.duplikate;
     panelEinstellungen.querySelector('#abg-loes').checked = !!einst.loesungen;
+    panelEinstellungen.querySelector('#abg-ordner').value = einst.ordner || '';
     panelEinstellungen.querySelector('#abg-modus').value = einst.modus === 'backup' ? 'backup' : 'schnell';
     panelEinstellungen.querySelector('#abg-ki').checked = einst.kiHinweis !== false;
     panelEinstellungen.querySelector('#abg-ki-text').value = einst.kiHinweisText || KI_HINWEIS_STANDARD;
@@ -762,6 +977,7 @@ export function starteGrader() {
       logZeile(body, 'Stand zurückgesetzt — der nächste Download holt wieder alle Abgaben.', 'ok');
     });
     panelEinstellungen.querySelector('#abg-einst-speichern').addEventListener('click', async () => {
+      einst.ordner = panelEinstellungen.querySelector('#abg-ordner').value.trim();
       einst.skill = panelEinstellungen.querySelector('#abg-skill').value.trim();
       einst.duplikate = panelEinstellungen.querySelector('#abg-dupl').checked;
       einst.loesungen = panelEinstellungen.querySelector('#abg-loes').checked;
@@ -1144,7 +1360,7 @@ export function starteGrader() {
     download(zipBlob, zipName);
     logZeile(body, `ZIP heruntergeladen: ${zipName} — entpackt zum Ordner "${ordnerName}" (${anzahlAbgabeDateien} Abgabedatei(en) + bewertung.csv + _lauf.json)`, 'ok');
 
-    const prompt = promptErzeugen(lauf);
+    const prompt = promptErzeugen(lauf, einst);
     zeigePrompt(body, prompt);
   }
 
@@ -1160,10 +1376,11 @@ export function starteGrader() {
   // Der Prompt bleibt bewusst kurz: er nennt nur Ort, Umfang und Lauf-Art und
   // verweist für alles Fachliche auf die Bewertungs-Skill. Das spart Token und
   // hält die Erweiterung fach- und lehrkraftunabhängig.
-  function promptErzeugen(lauf) {
+  function promptErzeugen(lauf, einst) {
     const stufe = lauf.laufart === 'abschluss'
       ? 'Abschlussfeedback MIT Note'
       : 'Zwischenfeedback OHNE Note';
+    ortZeilen(z, einst);
     const z = [];
     z.push('Aufgaben-Bewertung starten.');
     z.push('');
@@ -1188,6 +1405,16 @@ export function starteGrader() {
     }
     z.push(`${n++}. Je Kürzel-ID Feedback schreiben${lauf.laufart === 'abschluss' ? ' und Note vergeben' : ' (kein Notenfeld füllen)'} — anonym, keine Vergleiche zwischen Abgaben im Feedbacktext.`);
     z.push(`${n++}. "${lauf.ordner}/${lauf.csv}" ausfüllen: Spalten Kuerzel-ID;Note;Feedback unverändert, semikolongetrennt. Zeilenumbrüche im Feedbackfeld sind erlaubt, das Feld dann in Anführungszeichen setzen; keine geraden doppelten Anführungszeichen im Text selbst.`);
+    // Rohwerte statt fertigem HTML: nur so kann der Regler spaeter noch
+    // wirken, ohne dass die KI alles neu liest (Arne, 17.09.2026).
+    z.push(`${n++}. Das Feedbackfeld NICHT als fertigen Text schreiben, sondern als Rohwerte — eine Zeile je Arbeitsblatt, fünf Felder mit senkrechtem Strich getrennt:`);
+    z.push('   Aufgabenname|Vollstaendigkeit|Fachlichkeit|Datum|Text');
+    z.push('   Vollstaendigkeit: 0, 25, 50, 75 oder 100 — wie viel von der Aufgabe bearbeitet wurde, ohne Rücksicht auf Richtigkeit.');
+    z.push('   Fachlichkeit: 0 ohne Beanstandung, 1 kleine Ungenauigkeit, 2 deutlicher Mangel, 3 schwerer Fehler.');
+    z.push(`   Datum: der Tag, an dem das Blatt abgegeben wurde — heute ist ${lauf.datum}, ältere Blätter behalten ihr altes Datum aus "_status.json".`);
+    z.push('   Text: ein bis drei Sätze, ohne Prozentangabe und ohne Punktzahl — die rechnet die Erweiterung selbst aus.');
+    z.push(`${n++}. Erste Zeile des Feedbackfelds ist immer @${lauf.datum} (das Datum dieses Durchgangs). Ein Hinweis auf den Arbeitsstand kommt als eigene Zeile mit Ausrufezeichen davor: !Kopfzeile|Fließtext — er wird rot und ganz oben ausgegeben.`);
+    z.push('   In den Rohwertzeilen darf kein Semikolon und kein gerades doppeltes Anführungszeichen stehen.');
     z.push(`${n++}. Die gesichteten Dateien aus dem Import- in den Output-Ordner übernehmen (gleicher Kürzel-Unterordner, geänderte Fassung ersetzt die alte), "_status.json" fortschreiben und den Import-Ordner leeren. Das Archiv im Output-Ordner enthält danach wieder ALLE Abgaben dieses Themas.`);
     z.push(`${n++}. Ausgefüllte CSV zurückgeben — sie wird über den Reiter „Einfügen" wieder in Moodle eingetragen.`);
     z.push('');
@@ -1263,7 +1490,21 @@ export function starteGrader() {
     const einst = await einstellungenLaden();
     const hinweis = einst.kiHinweis !== false ? (einst.kiHinweisText || KI_HINWEIS_STANDARD).trim() : '';
 
-    let getroffen = 0, noten = 0, kommentare = 0;
+    // Der Regler rechnet beim Eintragen. Steht in der CSV die strukturierte
+    // Form (Name|Vollstaendigkeit|Fachlichkeitsstufe|Datum|Text), baut die
+    // Erweiterung daraus das HTML — dann aendert eine andere Reglerstellung
+    // alle Feedbacks, ohne dass die KI noch einmal lesen muss.
+    const faktoren = (STRENGE[einst.strenge] || STRENGE.normal).f;
+    const mass = await massstabLaden();
+    const punkteJeBlatt = {};
+    if (mass && Array.isArray(mass.aufgaben) && mass.aufgaben.length) {
+      const summe = mass.aufgaben.reduce((a, x) => a + (Number(x.gewicht) || 0), 0);
+      if (summe > 0) mass.aufgaben.forEach((x) => {
+        punkteJeBlatt[x.name] = (Number(x.gewicht) || 0) / summe * 100;
+      });
+    }
+
+    let getroffen = 0, noten = 0, kommentare = 0, gebaut = 0;
     const unbekannt = [], nichtAufSeite = [];
 
     for (let i = 1; i < zeilen.length; i++) {
@@ -1279,6 +1520,16 @@ export function starteGrader() {
 
       const note = iNote >= 0 ? (z[iNote] || '').trim() : '';
       let feedback = iFeedback >= 0 ? (z[iFeedback] || '').trim() : '';
+      // Rohwerte erkennen und selbst rendern. Findet sich keine einzige
+      // strukturierte Zeile, bleibt der Text unveraendert stehen — aeltere
+      // CSVs mit fertigem HTML funktionieren weiter.
+      if (feedback) {
+        const roh = feedbackLesen(feedback);
+        if (roh.blaetter.length || roh.stand) {
+          feedback = feedbackBauen(roh, faktoren, punkteJeBlatt);
+          gebaut += 1;
+        }
+      }
       // Hinweis anhängen — aber nur einmal, falls die CSV ihn schon enthält.
       if (feedback && hinweis && feedback.indexOf(hinweis) === -1) {
         const istHtml = /<(p|br|div|strong|em|span|ul|ol)\b/i.test(feedback);
@@ -1310,6 +1561,10 @@ export function starteGrader() {
       logZeile(body, `Nicht auf dieser Seite sichtbar (Seitengröße?): ${nichtAufSeite.join(', ')} — Seite mit "Alle" anzeigen und erneut eintragen.`, 'fehler');
     }
     if (!getroffen) { logZeile(body, 'Keine einzige Zeile konnte zugeordnet werden.', 'fehler'); return; }
+    if (gebaut) {
+      logZeile(body, `${gebaut} Feedback(s) aus Rohwerten gebaut — Strenge: ${(STRENGE[einst.strenge] || STRENGE.normal).text}.`, 'ok');
+      if (!mass) logZeile(body, 'Kein Maßstab gespeichert — im Feedback stehen Prozentwerte statt Punkten.', 'fehler');
+    }
 
     logZeile(body, `${getroffen} Person(en) ausgefüllt: ${kommentare} Feedback, ${noten} Note(n). NICHT gespeichert.`
       + (hinweis ? ' KI-Hinweis angehängt.' : ' Ohne KI-Hinweis.'), 'ok');

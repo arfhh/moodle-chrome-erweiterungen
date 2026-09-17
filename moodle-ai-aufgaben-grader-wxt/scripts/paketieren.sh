@@ -1,6 +1,5 @@
 #!/bin/bash
-# Baut alle drei Browser-Versionen, benennt die WXT-Standardordner (chrome-mv3,
-# firefox-mv3, edge-mv3) in Veroeffentlichungsnamen um und packt sie zusammen mit
+# Baut alle drei Browser-Versionen und packt sie zusammen mit
 # der README.md aus diesem Projektordner zu dist/moodle-ai-aufgaben-grader.zip im
 # Repo-Wurzelordner.
 # Aufruf:  bash scripts/paketieren.sh   (oder: npm run paket)
@@ -11,13 +10,12 @@ cd "$DIR"
 NAME="moodle-ai-aufgaben-grader"
 OUT="Erweiterung"
 
-npm run build-all
-
-# alte Veroeffentlichungsordner aus dem letzten Durchlauf entfernen, README bleibt
+# Reste eines frueheren Durchlaufs ZUERST weg — seit die Builds direkt in die
+# benannten Ordner schreiben, wuerde ein Aufraeumen danach das frische Ergebnis
+# loeschen (17.09.2026).
 for b in chrom firefox edge; do rm -rf "$OUT/$NAME-$b"; done
-mv "$OUT/chrome-mv3" "$OUT/$NAME-chrom"
-mv "$OUT/firefox-mv3" "$OUT/$NAME-firefox"
-mv "$OUT/edge-mv3" "$OUT/$NAME-edge"
+
+npm run build-all
 
 # README ist im Repo verfolgt (Erweiterung/ selbst ist gitignored, siehe .gitignore)
 cp "README.md" "$OUT/README.md"

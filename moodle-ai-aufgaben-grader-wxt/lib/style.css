@@ -314,3 +314,6 @@
 }
 #abg-panel .abg-mleiste { display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0 4px; }
 #abg-panel .abg-mleiste button { width: auto; margin: 0; flex: 0 0 auto; }
+
+/* Regler fuer die Gewichtung der Fachlichkeit */
+.abg-regler { width: 100%; margin: 2px 0 4px; accent-color: #d3070f; }
