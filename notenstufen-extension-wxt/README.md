@@ -58,13 +58,24 @@ Die Erweiterung braucht keine besonderen Rechte.
    benutzte Tabelle bleibt gespeichert und steht beim nächsten Öffnen
    schon bereit.
 
+Im Panel steht eine Checkbox **„Nur für diesen Kurs"**. Ohne Haken gilt die
+Tabelle als gemeinsamer Standard für alle Kurse ohne eigene Einstellung —
+praktisch, wenn immer dieselbe Schulform unterrichtet wird. Mit Haken merkt
+sich die Erweiterung diese Tabelle nur für genau diesen Kurs (erkannt an der
+Kurs-ID `id=` in der Adresszeile) — praktisch, wenn parallel Kurse mit
+unterschiedlichen Notenskalen laufen (z. B. Gymnasium und Stadtteilschule).
+Ein Kurs mit eigener Tabelle zeigt die Checkbox beim nächsten Öffnen
+automatisch wieder angehakt.
+
 
 ## Eigene Notenskala einstellen
 
 Die Tabelle im Panel ist immer direkt bearbeitbar — kein separates
-Zahnrad, keine Einstellungsseite. Eine Änderung an einem Feld gilt, sobald
-auf „⚡ Notenstufen eintragen“ geklickt wird; die beiden Vorgabe-Knöpfe
-laden und speichern ihre Skala sofort.
+Zahnrad, keine Einstellungsseite. Eine Änderung an einem Feld (auch eine
+entfernte oder neu hinzugefügte Zeile) gilt, sobald auf
+„⚡ Notenstufen eintragen“ geklickt wird; die beiden Vorgabe-Knöpfe laden
+und speichern ihre Skala sofort, ebenfalls je nach Haken „Nur für diesen
+Kurs" global oder kursbezogen.
 
 Die gespeicherten Werte gelten **nur für den eigenen Browser**
 (lokal über `browser.storage.local`). Installiert eine Kollegin oder

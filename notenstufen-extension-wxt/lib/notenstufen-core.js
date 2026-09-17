@@ -68,15 +68,99 @@ const PENDING_TTL_MS = 30000;   // Signal nur 30 s gueltig, gegen veraltete Rest
 const MAX_RUNDEN = 12;          // Sicherheitsnetz gegen Endlosschleifen
 
 // ------------------------------------------------------------
-//  Einstellungen
+//  Einstellungen — pro Kurs, mit Vorbelegung aus dem zuletzt benutzten Kurs
 // ------------------------------------------------------------
-function getNoten() {
-    return new Promise(resolve => {
-        browser.storage.local.get(['notenstufen'], (result) => {
-            resolve(Array.isArray(result.notenstufen) && result.notenstufen.length > 0
-                ? result.notenstufen
-                : DEFAULT_NOTEN);
+// Jeder Kurs speichert seine eigene Notenskala unter seiner Kurs-ID (Wunsch
+// aus der Praxis, 17.09.2026: Kollegien unterrichten oft mehrere Schulformen
+// gleichzeitig). Ein neuer, noch nie eingestellter Kurs startet nicht bei
+// Null, sondern mit der zuletzt in IRGENDEINEM Kurs benutzten Tabelle
+// (notenstufenStandard) — wer immer dieselbe Schulform unterrichtet, muss
+// so nichts wiederholt eintippen. Nur wenn es weder eine Kurs- noch eine
+// Standard-Tabelle gibt, greift die Gymnasium-Vorgabe.
+// Migration: die Fassung vor dieser Aenderung kannte nur den einen
+// globalen Schluessel "notenstufen" fuer alle Kurse — der wird, falls noch
+// vorhanden, als Standard-Tabelle uebernommen, damit eine schon angepasste
+// Skala nicht verloren geht.
+function holeKursId() {
+    const m = location.href.match(/[?&]id=(\d+)/);
+    return m ? m[1] : 'unbekannt';
+}
+
+function getNoten(kursId) {
+    return new Promise((resolve) => {
+        browser.storage.local.get(
+            ['notenstufenProKurs', 'notenstufenStandard', 'notenstufen'],
+            (result) => {
+                const proKurs = result.notenstufenProKurs && typeof result.notenstufenProKurs === 'object'
+                    ? result.notenstufenProKurs
+                    : {};
+                if (Array.isArray(proKurs[kursId]) && proKurs[kursId].length > 0) {
+                    resolve(proKurs[kursId]);
+                } else if (Array.isArray(result.notenstufenStandard) && result.notenstufenStandard.length > 0) {
+                    resolve(result.notenstufenStandard);
+                } else if (Array.isArray(result.notenstufen) && result.notenstufen.length > 0) {
+                    resolve(result.notenstufen);   // Altbestand vor der Kurstrennung
+                } else {
+                    resolve(DEFAULT_NOTEN);
+                }
+            },
+        );
+    });
+}
+
+function speichereNurFuerKurs(kursId, noten) {
+    return new Promise((resolve) => {
+        browser.storage.local.get(['notenstufenProKurs'], (result) => {
+            const proKurs = result.notenstufenProKurs && typeof result.notenstufenProKurs === 'object'
+                ? result.notenstufenProKurs
+                : {};
+            proKurs[kursId] = noten;
+            browser.storage.local.set({ notenstufenProKurs: proKurs }, resolve);
         });
+    });
+}
+
+// "Fuer alle Kurse" heisst: diese Tabelle wird der neue Standard, UND eine
+// eventuell vorhandene eigene Tabelle genau dieses Kurses wird entfernt —
+// sonst wuerde die alte Kurs-eigene Tabelle den neuen Standard weiter
+// verdecken, obwohl der Haken gerade extra entfernt wurde.
+function speichereFuerAlleKurse(kursId, noten) {
+    return new Promise((resolve) => {
+        browser.storage.local.get(['notenstufenProKurs'], (result) => {
+            const proKurs = result.notenstufenProKurs && typeof result.notenstufenProKurs === 'object'
+                ? result.notenstufenProKurs
+                : {};
+            delete proKurs[kursId];
+            browser.storage.local.set(
+                { notenstufenProKurs: proKurs, notenstufenStandard: noten },
+                resolve,
+            );
+        });
+    });
+}
+
+// Fuer die Tabelle im Panel: welche Werte gelten hier gerade, und hat DIESER
+// Kurs eine eigene Tabelle (fuer den Anfangszustand des Kaestchens)?
+function ladeKursEinstellung(kursId) {
+    return new Promise((resolve) => {
+        browser.storage.local.get(
+            ['notenstufenProKurs', 'notenstufenStandard', 'notenstufen'],
+            (result) => {
+                const proKurs = result.notenstufenProKurs && typeof result.notenstufenProKurs === 'object'
+                    ? result.notenstufenProKurs
+                    : {};
+                const eigene = Array.isArray(proKurs[kursId]) && proKurs[kursId].length > 0;
+                if (eigene) {
+                    resolve({ noten: proKurs[kursId], kurseigen: true });
+                } else if (Array.isArray(result.notenstufenStandard) && result.notenstufenStandard.length > 0) {
+                    resolve({ noten: result.notenstufenStandard, kurseigen: false });
+                } else if (Array.isArray(result.notenstufen) && result.notenstufen.length > 0) {
+                    resolve({ noten: result.notenstufen, kurseigen: false });   // Altbestand
+                } else {
+                    resolve({ noten: DEFAULT_NOTEN, kurseigen: false });
+                }
+            },
+        );
     });
 }
 
@@ -238,7 +322,7 @@ function waitForMoreRows(before, timeout = 3000) {
 // "Felder hinzufuegen" wird das Pending-Signal neu gesetzt, damit die frisch
 // geladene Seite den Ablauf selbst fortsetzt.
 async function run(runde = 0) {
-    const noten = await getNoten();
+    const noten = await getNoten(holeKursId());
 
     // Haken zuerst: er wird beim Neuladen als Formularwert mit uebertragen
     const cb = findOverrideCheckbox();
@@ -351,9 +435,26 @@ function baueTabellenzeile(tbody, index, buchstabe, prozent) {
     inputProzent.value = prozent;
     tdProzent.appendChild(inputProzent);
 
+    // Zeile entfernen: wer eine Note nicht braucht (z. B. keine 1+), loescht
+    // sie hier einfach heraus. Wirkt erst nach "Notenstufen eintragen", genau
+    // wie eine getippte Aenderung an Buchstabe/Prozent.
+    const tdWeg = document.createElement('td');
+    const weg = document.createElement('button');
+    weg.type = 'button';
+    weg.className = 'not-entfernen';
+    weg.textContent = '✕';
+    weg.title = 'Diese Note entfernen';
+    weg.addEventListener('click', () => {
+        const noten = leseTabelle(tbody);
+        noten.splice(index, 1);
+        renderTabelle(tbody, noten);
+    });
+    tdWeg.appendChild(weg);
+
     tr.appendChild(tdLabel);
     tr.appendChild(tdBuchstabe);
     tr.appendChild(tdProzent);
+    tr.appendChild(tdWeg);
     tbody.appendChild(tr);
 }
 
@@ -395,14 +496,20 @@ function baueUI() {
         <p class="not-hinweis">Werte gelten nur für diesen Browser und bleiben, bis sie hier geändert werden.</p>
         <table>
           <thead>
-            <tr><th style="width:56px;">Note</th><th>Buchstabe</th><th>Prozent ≥</th></tr>
+            <tr><th style="width:56px;">Note</th><th>Buchstabe</th><th>Prozent ≥</th><th></th></tr>
           </thead>
           <tbody class="not-tabelle"></tbody>
         </table>
+        <button type="button" class="not-hinzufuegen">+ Note hinzufügen</button>
         <div class="not-presets">
           <button type="button" class="not-preset" data-preset="gymnasium">Gymnasium-Standard</button>
           <button type="button" class="not-preset" data-preset="stadtteilschule">Stadtteilschule-Standard</button>
         </div>
+        <label class="not-kurscheck">
+          <input type="checkbox" class="not-nur-kurs" />
+          Nur für diesen Kurs
+        </label>
+        <p class="not-kurshinweis">Ohne Haken gilt diese Tabelle künftig für alle Kurse ohne eigene Einstellung — auch für diesen.</p>
         <button type="button" class="not-eintragen">⚡ Notenstufen eintragen</button>
       </div>
     `;
@@ -431,8 +538,19 @@ function baueUI() {
     toggle.addEventListener('click', () => { panel.hidden = false; toggle.hidden = true; });
     panel.querySelector('.not-close').addEventListener('click', () => { panel.hidden = true; toggle.hidden = false; });
 
+    const kursId = holeKursId();
     const tbody = panel.querySelector('.not-tabelle');
-    getNoten().then((noten) => renderTabelle(tbody, noten));
+    const nurKursBox = panel.querySelector('.not-nur-kurs');
+
+    ladeKursEinstellung(kursId).then(({ noten, kurseigen }) => {
+        renderTabelle(tbody, noten);
+        nurKursBox.checked = kurseigen;
+    });
+
+    async function speichernNachHaken(noten) {
+        if (nurKursBox.checked) await speichereNurFuerKurs(kursId, noten);
+        else await speichereFuerAlleKurse(kursId, noten);
+    }
 
     panel.querySelectorAll('.not-preset').forEach((btn) => {
         btn.addEventListener('click', async () => {
@@ -440,12 +558,18 @@ function baueUI() {
                 ? DEFAULT_NOTEN_STADTTEILSCHULE
                 : DEFAULT_NOTEN;
             renderTabelle(tbody, noten);
-            await speichereNoten(noten);
+            await speichernNachHaken(noten);
         });
     });
 
+    panel.querySelector('.not-hinzufuegen').addEventListener('click', () => {
+        const noten = leseTabelle(tbody);
+        noten.push(['', '']);
+        renderTabelle(tbody, noten);
+    });
+
     panel.querySelector('.not-eintragen').addEventListener('click', async () => {
-        await speichereNoten(leseTabelle(tbody));
+        await speichernNachHaken(leseTabelle(tbody));
         panel.hidden = true; toggle.hidden = false;
         if (isOverviewPage()) gotoEditAndFill();
         else run(0);
