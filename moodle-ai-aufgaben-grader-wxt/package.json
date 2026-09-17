@@ -1,0 +1,23 @@
+{
+  "name": "moodle-ai-aufgaben-grader",
+  "private": true,
+  "version": "1.5.0",
+  "type": "module",
+  "scripts": {
+    "dev": "wxt",
+    "dev:firefox": "wxt -b firefox",
+    "build:chrome": "wxt build -b chrome",
+    "build:firefox": "wxt build -b firefox",
+    "build:edge": "wxt build -b edge",
+    "build-all": "npm run build:chrome && npm run build:firefox && npm run build:edge",
+    "zip:chrome": "wxt zip -b chrome",
+    "zip:firefox": "wxt zip -b firefox",
+    "lint": "web-ext lint --source-dir=Erweiterung/chrome-mv3 && web-ext lint --source-dir=Erweiterung/firefox-mv3",
+    "postinstall": "wxt prepare",
+    "paket": "bash scripts/paketieren.sh"
+  },
+  "devDependencies": {
+    "wxt": "^0.21.4",
+    "web-ext": "^10.6.0"
+  }
+}
