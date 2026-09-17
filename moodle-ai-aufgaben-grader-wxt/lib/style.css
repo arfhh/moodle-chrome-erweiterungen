@@ -192,10 +192,11 @@
   z-index: 999998;
   width: 44px;
   height: 44px;
-  padding: 6px;
-  background: #fff;
-  color: #d3070f;
-  border: 2px solid #d3070f;
+  padding: 0;
+  overflow: hidden;
+  background: #d3070f;
+  color: #fff;
+  border: none;
   border-radius: 50%;
   font-size: 16px;
   font-weight: 700;
@@ -206,9 +207,14 @@
   align-items: center;
   justify-content: center;
 }
+#abg-toggle:hover { background: #a80509; }
+/* Icon deckt den ganzen Kreis, wie beim Coach (.co-fab) und Notenstufen
+   (#not-toggle): sonst bleibt ein heller Ring zwischen Icon und
+   Button-Hintergrund sichtbar (Arne, 17.09.2026). */
 #abg-toggle img {
-  width: 28px;
-  height: 28px;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
   display: block;
 }
 

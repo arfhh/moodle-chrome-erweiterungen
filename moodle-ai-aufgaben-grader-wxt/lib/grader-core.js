@@ -695,15 +695,19 @@ export function starteGrader() {
     document.body.appendChild(wrap);
 
     // Eingeklappt bleibt nur ein rundes Icon stehen — Text wäre auf der ohnehin
-    // vollen Bewerten-Seite unnötig breit (Arne, 10.09.2026). icons/ ist in
+    // vollen Bewerten-Seite unnötig breit (Arne, 10.09.2026). icon/ ist in
     // web_accessible_resources eingetragen, sonst lädt das Bild auf der Moodle-Seite
     // nicht; ohne browser.runtime bleibt ein Buchstabe als Rückfallebene.
+    // Korrigiert 17.09.2026: der Pfad hiess "icons/icon32.png" (alte Hand-MV3-
+    // Struktur), WXT legt die Icons aber unter public/icon/ als "icon/32.png" ab —
+    // das Bild ist deshalb seit dem WXT-Umzug nie geladen, nur der leere weisse
+    // Kreis war zu sehen.
     const toggle = document.createElement('button');
     toggle.id = 'abg-toggle';
     toggle.title = 'Moodle AI Aufgaben-Grader öffnen';
     toggle.setAttribute('aria-label', 'Moodle AI Aufgaben-Grader öffnen');
     let iconUrl = '';
-    try { iconUrl = browser.runtime.getURL('icons/icon32.png'); } catch (e) { iconUrl = ''; }
+    try { iconUrl = browser.runtime.getURL('icon/32.png'); } catch (e) { iconUrl = ''; }
     if (iconUrl) {
       const bild = document.createElement('img');
       bild.src = iconUrl;
