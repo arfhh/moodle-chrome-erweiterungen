@@ -31,6 +31,35 @@ const DEFAULT_NOTEN = [
     ['6',  '0,00000'],
 ];
 
+// Stadtteilschule-Standardwerte (zweite Vorgabe, ueber den Preset-Knopf im Panel)
+const DEFAULT_NOTEN_STADTTEILSCHULE = [
+    ['E1+', '97,00'],
+    ['E1',  '94,00'],
+    ['E1-', '91,00'],
+    ['E2+', '86,00'],
+    ['E2',  '81,00'],
+    ['E2-', '77,00'],
+    ['E3+', '73,00'],
+    ['E3',  '68,00'],
+    ['E3-', '64,00'],
+    ['E4+', '59,00'],
+    ['E4',  '55,00'],
+    ['E4-', '50,00'],
+    ['G2+', '46,00'],
+    ['G2',  '42,00'],
+    ['G2-', '38,00'],
+    ['G3+', '34,00'],
+    ['G3',  '30,00'],
+    ['G3-', '27,00'],
+    ['G4+', '24,00'],
+    ['G4',  '21,00'],
+    ['G4-', '19,00'],
+    ['G5+', '16,00'],
+    ['G5',  '13,00'],
+    ['G5-', '10,00'],
+    ['G6',  '0,00'],
+];
+
 // Signal, das einen Seiten-Neuladevorgang ueberlebt. localStorage statt
 // sessionStorage, damit es auch dann sichtbar ist, wenn Moodle die Seite
 // wider Erwarten doch einmal in einem neuen Tab oeffnet.
@@ -295,49 +324,132 @@ function gotoEditAndFill() {
 // ------------------------------------------------------------
 //  Oberflaeche
 // ------------------------------------------------------------
-function openSettings() {
-    browser.runtime.sendMessage({ action: 'openOptions' });
+// Eingeklappt bleibt nur ein rundes Icon stehen, wie bei den anderen
+// Erweiterungen (Aufgaben-Grader #abg-toggle, Coach .co-fab) — icon/*.png
+// muss dafuer in web_accessible_resources stehen (wxt.config.ts), sonst
+// laedt das Bild auf der Moodle-Seite nicht.
+function baueTabellenzeile(tbody, index, buchstabe, prozent) {
+    const tr = document.createElement('tr');
+
+    const tdLabel = document.createElement('td');
+    tdLabel.className = 'not-label';
+    tdLabel.textContent = `Note ${index + 1}`;
+
+    const tdBuchstabe = document.createElement('td');
+    const inputBuchstabe = document.createElement('input');
+    inputBuchstabe.type = 'text';
+    inputBuchstabe.dataset.idx = String(index);
+    inputBuchstabe.dataset.feld = 'buchstabe';
+    inputBuchstabe.value = buchstabe;
+    tdBuchstabe.appendChild(inputBuchstabe);
+
+    const tdProzent = document.createElement('td');
+    const inputProzent = document.createElement('input');
+    inputProzent.type = 'text';
+    inputProzent.dataset.idx = String(index);
+    inputProzent.dataset.feld = 'prozent';
+    inputProzent.value = prozent;
+    tdProzent.appendChild(inputProzent);
+
+    tr.appendChild(tdLabel);
+    tr.appendChild(tdBuchstabe);
+    tr.appendChild(tdProzent);
+    tbody.appendChild(tr);
 }
 
-function addUI() {
-    if (document.getElementById('notenstufen-autofill-btn')) return;
+function renderTabelle(tbody, noten) {
+    tbody.innerHTML = '';
+    noten.forEach((paar, i) => baueTabellenzeile(tbody, i, paar[0], paar[1]));
+}
 
-    const wrapper = document.createElement('div');
-    wrapper.style.cssText = 'position:fixed;top:90px;right:20px;z-index:99999;display:flex;gap:6px;align-items:center;';
+function leseTabelle(tbody) {
+    const anzahl = tbody.querySelectorAll('tr').length;
+    const zeilen = Array.from({ length: anzahl }, () => ['', '']);
+    tbody.querySelectorAll('input').forEach((input) => {
+        const idx = parseInt(input.dataset.idx, 10);
+        const feldIndex = input.dataset.feld === 'buchstabe' ? 0 : 1;
+        zeilen[idx][feldIndex] = input.value.trim();
+    });
+    return zeilen;
+}
 
-    const btn = document.createElement('button');
-    btn.id = 'notenstufen-autofill-btn';
-    btn.type = 'button';
-    btn.textContent = isOverviewPage()
-        ? '⚡ Bearbeiten & Notenstufen ausfüllen'
-        : '⚡ Notenstufen automatisch ausfüllen';
-    btn.style.cssText = [
-        'padding:10px 16px', 'background:#2f7a3d', 'color:#fff',
-        'border:none', 'border-radius:6px', 'cursor:pointer',
-        'font-size:14px', 'font-weight:bold',
-        'box-shadow:0 2px 8px rgba(0,0,0,.3)'
-    ].join(';');
-    btn.addEventListener('click', () => {
-        clearPending();
+function speichereNoten(noten) {
+    return new Promise((resolve) => {
+        browser.storage.local.set({ notenstufen: noten }, resolve);
+    });
+}
+
+function baueUI() {
+    if (document.getElementById('not-panel') || document.getElementById('not-toggle')) return;
+
+    const panel = document.createElement('div');
+    panel.id = 'not-panel';
+    panel.hidden = true;
+    panel.innerHTML = `
+      <div class="not-head">
+        <img class="not-head-icon" alt="" />
+        <strong>Notenstufen Autofill</strong>
+        <span class="not-close" title="Einklappen">–</span>
+      </div>
+      <div class="not-body">
+        <p class="not-hinweis">Werte gelten nur für diesen Browser und bleiben, bis sie hier geändert werden.</p>
+        <table>
+          <thead>
+            <tr><th style="width:56px;">Note</th><th>Buchstabe</th><th>Prozent ≥</th></tr>
+          </thead>
+          <tbody class="not-tabelle"></tbody>
+        </table>
+        <div class="not-presets">
+          <button type="button" class="not-preset" data-preset="gymnasium">Gymnasium-Standard</button>
+          <button type="button" class="not-preset" data-preset="stadtteilschule">Stadtteilschule-Standard</button>
+        </div>
+        <button type="button" class="not-eintragen">⚡ Notenstufen eintragen</button>
+      </div>
+    `;
+    document.body.appendChild(panel);
+
+    const toggle = document.createElement('button');
+    toggle.id = 'not-toggle';
+    toggle.title = 'Notenstufen Autofill öffnen';
+    toggle.setAttribute('aria-label', 'Notenstufen Autofill öffnen');
+    let iconUrl = '';
+    try { iconUrl = browser.runtime.getURL('icon/32.png'); } catch (e) { iconUrl = ''; }
+    if (iconUrl) {
+        const bild = document.createElement('img');
+        bild.src = iconUrl;
+        bild.alt = '';
+        toggle.appendChild(bild);
+        panel.querySelector('.not-head-icon').src = iconUrl;
+    } else {
+        toggle.textContent = 'N';
+        panel.querySelector('.not-head-icon').remove();
+    }
+    document.body.appendChild(toggle);
+
+    // Start geschlossen: nur das Icon ist zu sehen, wie bei den anderen
+    // Erweiterungen. Das Panel oeffnet sich erst auf Klick.
+    toggle.addEventListener('click', () => { panel.hidden = false; toggle.hidden = true; });
+    panel.querySelector('.not-close').addEventListener('click', () => { panel.hidden = true; toggle.hidden = false; });
+
+    const tbody = panel.querySelector('.not-tabelle');
+    getNoten().then((noten) => renderTabelle(tbody, noten));
+
+    panel.querySelectorAll('.not-preset').forEach((btn) => {
+        btn.addEventListener('click', async () => {
+            const noten = btn.dataset.preset === 'stadtteilschule'
+                ? DEFAULT_NOTEN_STADTTEILSCHULE
+                : DEFAULT_NOTEN;
+            renderTabelle(tbody, noten);
+            await speichereNoten(noten);
+        });
+    });
+
+    panel.querySelector('.not-eintragen').addEventListener('click', async () => {
+        await speichereNoten(leseTabelle(tbody));
+        panel.hidden = true; toggle.hidden = false;
         if (isOverviewPage()) gotoEditAndFill();
         else run(0);
     });
-
-    const gear = document.createElement('button');
-    gear.type = 'button';
-    gear.title = 'Eigene Prozentwerte einstellen';
-    gear.textContent = '⚙️';
-    gear.style.cssText = [
-        'padding:10px 12px', 'background:#fff', 'color:#333',
-        'border:1px solid #ccc', 'border-radius:6px', 'cursor:pointer',
-        'font-size:16px',
-        'box-shadow:0 2px 8px rgba(0,0,0,.2)'
-    ].join(';');
-    gear.addEventListener('click', openSettings);
-
-    wrapper.appendChild(btn);
-    wrapper.appendChild(gear);
-    document.body.appendChild(wrapper);
 }
 
 // ------------------------------------------------------------
@@ -352,7 +464,7 @@ function istNotenstufenSeite() {
 
 function init() {
     if (!istNotenstufenSeite()) return;
-    addUI();
+    baueUI();
 
     // Kommen wir gerade von einem Seitenwechsel, den die Erweiterung ausgeloest hat?
     const p = readPending();

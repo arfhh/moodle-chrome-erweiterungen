@@ -19,13 +19,18 @@ export default defineConfig({
     name: 'Moodle Notenstufen Autofill',
     version: '2.7.0',
     description:
-      'Füllt die Notenstufen-Tabelle in Moodle-Kursen automatisch aus - in jeder Moodle-Installation, auch in einem Unterverzeichnis. Werte im Popup individuell anpassbar.',
+      'Füllt die Notenstufen-Tabelle in Moodle-Kursen automatisch aus - in jeder Moodle-Installation, auch in einem Unterverzeichnis. Werte im Panel auf der Seite individuell anpassbar.',
     permissions: ['storage'],
-    // Als eigener Tab, nicht eingebettet in chrome://extensions — die
-    // Einstellungsseite (Zahnrad im Content Script UND Toolbar-Icon-Popup)
-    // war schon in Version 2.x ein eigener, frei bedienbarer Tab.
-    options_ui: { page: 'popup.html', open_in_tab: true },
-    action: { default_title: 'Notenstufen-Einstellungen' },
+    action: { default_title: 'Notenstufen Autofill' },
+    web_accessible_resources: [
+      {
+        resources: ['icon/*.png'],
+        // ACHTUNG: In web_accessible_resources sind KEINE Platzhalter im Pfad
+        // erlaubt — der Pfad muss '/*' sein. In content_scripts.matches ist
+        // dasselbe Muster dagegen gueltig. (Lehre aus dem Aufgaben-Grader-Umzug.)
+        matches: ['https://*/*', 'http://*/*'],
+      },
+    ],
     browser_specific_settings: {
       gecko: {
         id: 'notenstufen-autofill@spielhoff.de',

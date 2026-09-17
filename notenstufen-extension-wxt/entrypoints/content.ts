@@ -1,3 +1,4 @@
+import '../lib/style.css';
 import { starteNotenstufen } from '../lib/notenstufen-core.js';
 
 // Das Content Script bleibt bewusst duenn: es meldet nur matches und Zeitpunkt
@@ -8,6 +9,7 @@ import { starteNotenstufen } from '../lib/notenstufen-core.js';
 export default defineContentScript({
   matches: ['*://*/*grade/edit/letter/*'],
   runAt: 'document_idle',
+  cssInjectionMode: 'manifest',
   main() {
     starteNotenstufen();
   },

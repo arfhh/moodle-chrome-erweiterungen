@@ -1,0 +1,84 @@
+/* Moodle Notenstufen Autofill — Panel-Styling, im Look der anderen Erweiterungen
+   (Aufgaben-Grader #abg-panel/#abg-toggle, Coach .co-panel/.co-fab).
+   Eigene Farbe Gruen #2f7a3d — schon aus Version 2.x der bewaehrten Fassung,
+   keine Ueberschneidung mit den anderen, da Notenstufen nur auf
+   grade/edit/letter/* erscheint. */
+
+#not-toggle {
+  position: fixed;
+  top: 90px;
+  right: 20px;
+  z-index: 99998;
+  width: 44px;
+  height: 44px;
+  padding: 6px;
+  background: #fff;
+  color: #2f7a3d;
+  border: 2px solid #2f7a3d;
+  border-radius: 50%;
+  font-size: 16px;
+  font-weight: 700;
+  line-height: 1;
+  cursor: pointer;
+  box-shadow: 0 2px 10px rgba(0, 0, 0, .3);
+}
+#not-toggle img { width: 28px; height: 28px; display: block; }
+
+#not-panel {
+  position: fixed;
+  top: 90px;
+  right: 20px;
+  z-index: 99999;
+  width: 340px;
+  max-width: calc(100vw - 32px);
+  max-height: calc(100vh - 110px);
+  overflow-y: auto;
+  background: #fff;
+  border: 1px solid #cbd5e1;
+  border-radius: 10px;
+  box-shadow: 0 6px 24px rgba(0, 0, 0, .22);
+  font-family: -apple-system, "Segoe UI", Arial, sans-serif;
+  font-size: 13px;
+  color: #1f2937;
+}
+#not-panel * { box-sizing: border-box; }
+
+#not-panel .not-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px;
+  background: #2f7a3d;
+  color: #fff;
+  border-radius: 9px 9px 0 0;
+}
+#not-panel .not-head-icon { width: 18px; height: 18px; display: block; }
+#not-panel .not-head strong { flex: 1; font-size: 13px; font-weight: 600; }
+#not-panel .not-close { cursor: pointer; font-weight: bold; padding: 0 4px; }
+
+#not-panel .not-body { padding: 12px; }
+#not-panel .not-hinweis { margin: 0 0 10px; font-size: 12px; color: #555; line-height: 1.4; }
+
+#not-panel table { width: 100%; border-collapse: collapse; margin-bottom: 10px; }
+#not-panel th { font-size: 11px; text-align: left; color: #666; padding-bottom: 4px; }
+#not-panel td { padding: 2px 4px 2px 0; }
+#not-panel .not-label { font-size: 12px; white-space: nowrap; padding-right: 6px; }
+#not-panel input {
+  width: 100%; box-sizing: border-box; padding: 4px 6px;
+  font-size: 12px; border: 1px solid #ccc; border-radius: 4px;
+}
+
+#not-panel .not-presets { display: flex; gap: 6px; margin-bottom: 8px; }
+#not-panel .not-preset {
+  flex: 1; padding: 7px 4px; font-size: 11px;
+  border: 1px solid #cbd5e1; border-radius: 6px;
+  background: #f1f5f9; color: #334155; cursor: pointer;
+}
+#not-panel .not-preset:hover { background: #e2e8f0; }
+
+#not-panel .not-eintragen {
+  display: block; width: 100%; padding: 9px 12px;
+  border: none; border-radius: 6px; background: #2f7a3d; color: #fff;
+  font-size: 13px; font-weight: 600; cursor: pointer;
+}
+#not-panel .not-eintragen:hover { background: #256030; }

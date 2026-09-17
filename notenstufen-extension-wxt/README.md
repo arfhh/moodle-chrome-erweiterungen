@@ -42,39 +42,29 @@ Die Erweiterung braucht keine besonderen Rechte.
 ## Benutzung
 
 1. In Moodle zu einem Kurs → **Bewertungen → Notenstufen** navigieren.
-2. Egal ob man auf der Übersichtsseite oder schon auf der
-   „Notenstufen bearbeiten"-Seite landet: Oben rechts erscheint ein
-   grüner Button.
-   - Auf der Übersichtsseite heißt er
-     **„⚡ Bearbeiten & Notenstufen ausfüllen"** – ein Klick genügt,
-     die Erweiterung klickt selbst auf „Bearbeiten" und macht danach
-     automatisch weiter.
-   - Auf der Bearbeiten-Seite selbst heißt er
-     **„⚡ Notenstufen automatisch ausfüllen"**.
-3. Die Erweiterung setzt automatisch den Haken bei
-   „Voreinstellungen überschreiben", legt bei Bedarf zusätzliche
-   Zeilen an (falls das Formular anfangs zu wenige hat) und trägt
-   alle Noten samt Prozentgrenzen ein.
-4. Kurz prüfen, dann ganz normal auf **„Änderungen speichern"**
-   klicken.
-5. Bei jedem weiteren Kurs denselben Ablauf wiederholen.
+2. Oben rechts erscheint ein rundes, grün umrandetes **Icon** — wie bei
+   den anderen eigenen Moodle-Erweiterungen. Ein Klick öffnet das Panel.
+3. Im Panel steht die Notenskala als Tabelle (Buchstabe + Prozentgrenze je
+   Zeile), direkt bearbeitbar. Darunter zwei Vorgabe-Knöpfe
+   („Gymnasium-Standard“ / „Stadtteilschule-Standard“) und der
+   grüne Knopf „⚡ Notenstufen eintragen“.
+4. Auf „⚡ Notenstufen eintragen“ klicken — die Erweiterung merkt sich
+   die Tabelle, wechselt bei Bedarf selbst von der Übersichts- zur
+   Bearbeiten-Seite, setzt den Haken bei „Voreinstellungen überschreiben“,
+   legt bei Bedarf zusätzliche Zeilen an und trägt alle Noten samt
+   Prozentgrenzen ein.
+5. Kurz prüfen, dann ganz normal auf „Änderungen speichern“ klicken.
+6. Bei jedem weiteren Kurs denselben Ablauf wiederholen — die zuletzt
+   benutzte Tabelle bleibt gespeichert und steht beim nächsten Öffnen
+   schon bereit.
 
 
 ## Eigene Notenskala einstellen
 
-Neben dem grünen Button sitzt ein kleines **Zahnrad (⚙️)**. Ein Klick
-öffnet die Einstellungsseite in einem neuen Tab. Dieselbe Oberfläche
-öffnet sich auch über das Symbol der Erweiterung in der Symbolleiste
-(Toolbar-Icon).
-
-Dort lassen sich:
-
-- alle Buchstaben/Noten und Prozentgrenzen einzeln bearbeiten,
-- per Klick auf **„Gymnasium-Standard"** oder
-  **„Stadtteilschule-Standard"** eine der beiden vorgegebenen Skalen
-  laden (wird sofort gespeichert),
-- mit **„Speichern"** eigene, manuell angepasste Werte sichern,
-- mit **„Schließen"** der Tab wieder geschlossen werden.
+Die Tabelle im Panel ist immer direkt bearbeitbar — kein separates
+Zahnrad, keine Einstellungsseite. Eine Änderung an einem Feld gilt, sobald
+auf „⚡ Notenstufen eintragen“ geklickt wird; die beiden Vorgabe-Knöpfe
+laden und speichern ihre Skala sofort.
 
 Die gespeicherten Werte gelten **nur für den eigenen Browser**
 (lokal über `browser.storage.local`). Installiert eine Kollegin oder
@@ -128,13 +118,10 @@ G6 ≥0 %
 
 | Datei/Ordner              | Zweck                                              |
 |----------------------------|----------------------------------------------------|
-| `wxt.config.ts`            | Manifest-Angaben (Name, Version, Berechtigungen)   |
-| `entrypoints/content.ts`   | Meldet `matches` an, ruft den Kern auf             |
-| `lib/notenstufen-core.js`  | Füllt das Formular auf der Moodle-Seite aus        |
-| `entrypoints/background.ts`| Öffnet die Einstellungsseite über das Zahnrad      |
-| `entrypoints/popup/`       | Einstellungsseite über das Toolbar-Icon            |
-| `entrypoints/options/`     | dieselbe Einstellungsseite über das Zahnrad         |
-| `lib/notenstufen-ui.js`    | gemeinsame Tabellen-/Speicherlogik für Popup+Options |
+| `wxt.config.ts`            | Manifest-Angaben (Name, Version, Berechtigungen, Icon-Freigabe) |
+| `entrypoints/content.ts`   | Meldet `matches` an, bindet `lib/style.css` ein, ruft den Kern auf |
+| `lib/notenstufen-core.js`  | Icon-Panel, Tabelle und das Ausfüllen des Moodle-Formulars |
+| `lib/style.css`            | Panel-Styling im Look der anderen Erweiterungen (grün) |
 | `scripts/paketieren.sh`    | baut alle drei Browser und packt `dist/notenstufen-autofill.zip` |
 
 
@@ -148,6 +135,8 @@ mit der bewährten `content.js` bis 2.7.0; einzige Änderungen:
 starteNotenstufen()`. Die Einstellungsseite (`popup.js`) ist entsprechend
 nach `lib/notenstufen-ui.js` gewandert und wird jetzt sowohl vom
 Toolbar-Popup als auch von der Options-Seite verwendet.
+
+**Layout-Umbau (17.09.2026, zweiter Durchlauf):** Popup und Options-Seite sind wieder entfallen — Toolbar-Icon ohne Popup, kein `background.ts` mehr. Die Bedienung laeuft jetzt wie bei den anderen Erweiterungen ueber ein rundes Icon direkt auf der Moodle-Seite (`#not-toggle`), das ein Panel mit eingebauter Tabelle und dem Knopf „⚡ Notenstufen eintragen“ oeffnet (`#not-panel`, Vorbild: `#abg-toggle`/`#abg-panel` des Aufgaben-Graders). Damit das Icon in der Seite ueberhaupt laedt, steht `icon/*.png` jetzt in `web_accessible_resources` — hat beim ersten WXT-Umzug gefehlt, deshalb blieb das Icon unsichtbar.
 
 Befehle: `npm run dev` (Chrome-Testlauf), `npm run build-all` (alle drei
 Browser), `npm run paket` (baut, benennt um, packt zu
