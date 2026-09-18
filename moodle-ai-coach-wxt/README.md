@@ -8,6 +8,67 @@ Version 1.8.7 · vierte Erweiterung neben *Moodle AI Grader*, *Moodle AI Reviewe
 
 ---
 
+## Für Einsteiger: Was, wo, wie?
+
+### Was macht diese Erweiterung?
+
+Bei Kurztests mit kurzen Freitextantworten (ein bis drei Sätze) liest der Coach den in
+der Frage hinterlegten Erwartungshorizont aus, bewertet die Antwort danach und trägt
+Punkte **und** ein kurzes Sprachfeedback ein — ohne dass jede Antwort einzeln von Hand
+gegen eine Musterlösung geprüft werden muss.
+
+### Wo taucht sie in Moodle auf?
+
+Kurs öffnen → den Test anklicken → **Ergebnisse** → **Manuelle Bewertung**. Der Coach
+erscheint auf der **Übersichtsseite** dieser Bewertung — also *ohne* eine einzelne
+Frage anzuklicken und *ohne* vorher auf „Automatisch bewertete Fragen anzeigen" zu
+drücken. Rechts erscheint dann ein **violetter runder Knopf** 🎓.
+
+Auf derselben Moodle-Seite arbeiten je nach Klick auch andere Erweiterungen dieser
+Familie — sie schließen sich gegenseitig aus und erscheinen nie gleichzeitig:
+
+| Seite / Zustand | Erweiterung | Farbe |
+|---|---|---|
+| Übersicht, normaler Zustand | **Moodle AI Coach** 🎓 | violett |
+| Übersicht, nach „Automatisch bewertete Fragen anzeigen" | Moodle AI Reviewer 🔎 | petrol |
+| Eine einzelne Frage geöffnet | Moodle AI Grader 🪄 | blau |
+
+### Installation (Schritt für Schritt für Einsteiger)
+
+Diese Erweiterung ist kein Programm zum Doppelklicken, sondern eine Browser-Erweiterung.
+Sie kommt nicht aus einem offiziellen „Store", sondern wird als **entpackte
+Erweiterung** geladen — das klingt komplizierter, als es ist.
+
+1. Auf der GitHub-Seite die ZIP herunterladen und entpacken (Doppelklick auf die
+   ZIP-Datei bzw. rechte Maustaste → „Alle extrahieren"). Danach liegt ein Ordner mit
+   drei Unterordnern da — einer je Browser: `moodle-ai-coach-chrom`,
+   `moodle-ai-coach-firefox`, `moodle-ai-coach-edge`.
+2. Diesen Ordner an einen **festen Platz** verschieben und **nicht mehr verschieben
+   oder umbenennen** — sonst muss die Erweiterung neu eingerichtet werden.
+
+**Google Chrome**
+1. Adresse `chrome://extensions` eingeben und Enter drücken.
+2. Oben rechts den Schalter **Entwicklermodus** einschalten.
+3. Auf **„Entpackte Erweiterung laden"** klicken und den Ordner `moodle-ai-coach-chrom`
+   auswählen (den, in dem `manifest.json` direkt drinliegt).
+
+**Microsoft Edge**
+Genauso wie bei Chrome, mit `edge://extensions` und dem Ordner `moodle-ai-coach-edge`.
+
+**Firefox**
+1. Adresse `about:debugging#/runtime/this-firefox` eingeben.
+2. Auf **„Temporäres Add-on laden…"** klicken und im Ordner `moodle-ai-coach-firefox`
+   eine beliebige Datei auswählen, z. B. `manifest.json`.
+3. Achtung: gilt nur bis zum nächsten Firefox-Neustart — für Dauerbetrieb braucht
+   Firefox eine Signierung durch Mozilla.
+
+Danach die Moodle-Seite einmal **neu laden** (F5), falls sie schon offen war.
+
+**Update:** denselben Ordner mit dem Inhalt der neuen ZIP überschreiben (Name nicht
+ändern) und in den Erweiterungseinstellungen auf „↺ neu laden" klicken.
+
+---
+
 ## Voraussetzungen — womit der Coach arbeitet
 
 Der Coach kontrolliert **ausschließlich Fragen vom Typ „Freitext"** (Moodle-Fragetyp

@@ -9,6 +9,22 @@ unter welcher Adresse es erreichbar ist — und seit dieser Fassung in
 **Chrome, Firefox und Edge** aus derselben Codebasis (siehe
 „WXT-Umstellung" unten).
 
+## Für Einsteiger: Was, wo, wie?
+
+### Was macht diese Erweiterung?
+
+Auf der Notenstufen-Seite eines Moodle-Kurses legt man fest, ab welchem Prozentwert
+welche Buchstabennote vergeben wird (z. B. ab 92 % eine „1"). Das von Hand einzutragen
+ist bei 16 oder mehr Stufen mühsam. Diese Erweiterung füllt die ganze Tabelle mit
+einem Klick — entweder mit einer voreingestellten Notenskala oder mit einer selbst
+angelegten.
+
+### Wo taucht sie in Moodle auf?
+
+Kurs öffnen → **Bewertungen** → oben das Zahnrad/die Einstellungen öffnen →
+**„Buchstabengrenzen"** (bzw. „Notenstufen") auswählen. Das ist die Seite mit der
+langen Tabelle aus Prozentwert und Buchstabe. Dort erscheint unten rechts ein
+**grüner runder Knopf**.
 
 ## Installation
 

@@ -10,6 +10,24 @@ Edge aus einer Codebasis · Lizenz: CC BY-SA 4.0
 
 ---
 
+## Für Einsteiger: Was, wo, wie?
+
+### Was macht diese Erweiterung?
+
+Nach einem Kurztest mit Zufallsfragen vergibt Moodle bei frei getippten Antworten
+(Lückentext, Kurzantwort, Numerisch) oft 0 Punkte, obwohl die Antwort inhaltlich richtig
+war — nur eben nicht wortgleich mit der hinterlegten Musterlösung. Diese Erweiterung
+durchsucht den ganzen Test auf einmal, sammelt alle diese unerkannten Antworten und
+legt sie fertig zum Einfügen in einen KI-Chat vor. Die berechneten neuen Punkte trägt
+sie danach automatisch ein.
+
+### Wo taucht sie in Moodle auf?
+
+Kurs öffnen → den Test anklicken → **Ergebnisse** → **Manuelle Bewertung** → oben auf
+**„Automatisch bewertete Fragen anzeigen"** klicken. Erst dann erscheint rechts der
+**petrolfarbene runde Knopf** 🔎. Auf der normalen Übersicht ohne diesen Klick bleibt
+die Erweiterung unsichtbar.
+
 ## Wozu?
 
 Bei Kurztests mit Zufallsfragen tippen Schülerinnen und Schüler Rechtschreibfehler
@@ -79,23 +97,39 @@ die Lückentypen `SA` bzw. `SAC` — nur so greift die 90-%-Stufe der Skala rich
 
 ---
 
-## Installation
+## Installation (Schritt für Schritt für Einsteiger)
 
-Die Erweiterung liegt entpackt in drei Browser-Ordnern vor:
-`moodle-ai-reviewer-chrom`, `moodle-ai-reviewer-firefox`, `moodle-ai-reviewer-edge`.
+Diese Erweiterung ist kein Programm zum Doppelklicken, sondern eine Browser-Erweiterung.
+Sie kommt nicht aus einem offiziellen „Store", sondern wird als **entpackte
+Erweiterung** geladen — das klingt komplizierter, als es ist.
 
-**Chrome / Edge:**
-1. `chrome://extensions` bzw. `edge://extensions` öffnen, **Entwicklermodus** einschalten.
-2. **Entpackte Erweiterung laden** → den passenden Ordner auswählen (`-chrom` bzw. `-edge`).
-3. Beim Update genügt „↺ neu laden" an derselben Stelle, solange der Ordner am selben
-   Platz bleibt (Chrome leitet die Erweiterungs-ID aus dem Pfad ab).
+1. Auf der GitHub-Seite die ZIP herunterladen und entpacken (Doppelklick auf die
+   ZIP-Datei bzw. rechte Maustaste → „Alle extrahieren"). Danach liegt ein Ordner mit
+   drei Unterordnern da — einer je Browser: `moodle-ai-reviewer-chrom`,
+   `moodle-ai-reviewer-firefox`, `moodle-ai-reviewer-edge`.
+2. Diesen Ordner an einen **festen Platz** verschieben und **nicht mehr verschieben
+   oder umbenennen** — sonst muss die Erweiterung neu eingerichtet werden.
 
-**Firefox:**
-1. `about:debugging#/runtime/this-firefox` öffnen.
-2. **„Temporäres Add-on laden…"** klicken und eine Datei im Ordner
-   `moodle-ai-reviewer-firefox` auswählen (z. B. `manifest.json`).
-3. Gilt bis zum nächsten Firefox-Neustart — für Dauerbetrieb braucht Firefox eine
-   Signierung durch Mozilla oder den Entwicklermodus.
+**Google Chrome**
+1. Adresse `chrome://extensions` eingeben und Enter drücken.
+2. Oben rechts den Schalter **Entwicklermodus** einschalten.
+3. Auf **„Entpackte Erweiterung laden"** klicken und den Ordner
+   `moodle-ai-reviewer-chrom` auswählen (den, in dem `manifest.json` direkt drinliegt).
+
+**Microsoft Edge**
+Genauso wie bei Chrome, mit `edge://extensions` und dem Ordner `moodle-ai-reviewer-edge`.
+
+**Firefox**
+1. Adresse `about:debugging#/runtime/this-firefox` eingeben.
+2. Auf **„Temporäres Add-on laden…"** klicken und im Ordner `moodle-ai-reviewer-firefox`
+   eine beliebige Datei auswählen, z. B. `manifest.json`.
+3. Achtung: gilt nur bis zum nächsten Firefox-Neustart — für Dauerbetrieb braucht
+   Firefox eine Signierung durch Mozilla.
+
+Danach die Moodle-Seite einmal **neu laden** (F5), falls sie schon offen war.
+
+**Update:** denselben Ordner mit dem Inhalt der neuen ZIP überschreiben (Name nicht
+ändern) und in den Erweiterungseinstellungen auf „↺ neu laden" klicken.
 
 Der *Moodle AI Grader* bleibt davon unberührt und läuft parallel weiter.
 

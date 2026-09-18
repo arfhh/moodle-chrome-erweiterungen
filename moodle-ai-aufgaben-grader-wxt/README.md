@@ -11,6 +11,24 @@ Version 1.5.0 · Lizenz: CC BY-SA 4.0
 
 ---
 
+## Für Einsteiger: Was, wo, wie?
+
+### Was macht diese Erweiterung?
+
+Sie hilft beim Bewerten von **Datei-Abgaben** im Moodle-Aufgabenmodul — PDFs,
+Arbeitshefte, Berichte. Sie lädt die Abgaben anonymisiert (nur mit Kürzel statt
+Klarnamen) als ZIP herunter, baut daraus einen fertigen Bewertungsauftrag für einen
+KI-Chat, und trägt am Ende die zurückgemeldeten Noten und Kommentare automatisch in
+Moodles Schnellbewertung ein. Gespeichert wird am Ende immer von Hand mit Moodles
+eigenem Speichern-Knopf — nichts wird ungesehen übernommen.
+
+### Wo taucht sie in Moodle auf?
+
+Kurs öffnen → die betreffende **Aufgabe** anklicken → **„Alle Abgaben ansehen"**
+(die Bewerten-Übersichtsseite mit der Tabelle aller abgebenden Personen). Dort
+erscheint ein **roter runder Knopf**. Auf der Einzelansicht einer Person erscheint
+nichts — dort wird nicht gearbeitet.
+
 ## Wozu?
 
 Wer Datei-Abgaben (PDFs, Arbeitshefte, Berichte) über eine KI bewerten lässt, kopiert
@@ -95,19 +113,44 @@ Downloads am selben Tag „ (1)" an.
 
 ---
 
-## Installation
+## Installation (Schritt für Schritt für Einsteiger)
 
-Diese ZIP enthält fertig gebaute Fassungen für drei Browser — je nach Browser den
-passenden Unterordner entpacken:
+Diese Erweiterung ist kein Programm zum Doppelklicken, sondern eine Browser-Erweiterung.
+Sie kommt nicht aus einem offiziellen „Store", sondern wird als **entpackte
+Erweiterung** geladen — das klingt komplizierter, als es ist.
 
-- `moodle-ai-aufgaben-grader-chrom/` — Chrome
-- `moodle-ai-aufgaben-grader-firefox/` — Firefox
-- `moodle-ai-aufgaben-grader-edge/` — Edge
+1. Auf der GitHub-Seite die ZIP herunterladen und entpacken (Doppelklick auf die
+   ZIP-Datei bzw. rechte Maustaste → „Alle extrahieren"). Danach liegt ein Ordner mit
+   drei Unterordnern da — einer je Browser:
+   - `moodle-ai-aufgaben-grader-chrom/` — Chrome
+   - `moodle-ai-aufgaben-grader-firefox/` — Firefox
+   - `moodle-ai-aufgaben-grader-edge/` — Edge
+2. Diesen Ordner an einen **festen Platz** verschieben und **nicht mehr verschieben
+   oder umbenennen** — sonst muss die Erweiterung neu eingerichtet werden.
 
-Unter `chrome://extensions/` bzw. `edge://extensions/` den Entwicklermodus aktivieren und
-den passenden Ordner über „Entpackte Erweiterung laden" auswählen. Firefox lädt den
-`moodle-ai-aufgaben-grader-firefox/`-Ordner über `about:debugging` → „Temporäres Add-on
-laden" (dauerhafte Installation erfordert eine Signierung durch Mozilla).
+**Google Chrome**
+1. Adresse `chrome://extensions` eingeben und Enter drücken.
+2. Oben rechts den Schalter **Entwicklermodus** einschalten.
+3. Auf **„Entpackte Erweiterung laden"** klicken und den Ordner
+   `moodle-ai-aufgaben-grader-chrom` auswählen (den, in dem `manifest.json` direkt
+   drinliegt).
+
+**Microsoft Edge**
+Genauso wie bei Chrome, mit `edge://extensions` und dem Ordner
+`moodle-ai-aufgaben-grader-edge`.
+
+**Firefox**
+1. Adresse `about:debugging#/runtime/this-firefox` eingeben.
+2. Auf **„Temporäres Add-on laden…"** klicken und im Ordner
+   `moodle-ai-aufgaben-grader-firefox` eine beliebige Datei auswählen, z. B.
+   `manifest.json`.
+3. Achtung: gilt nur bis zum nächsten Firefox-Neustart — für Dauerbetrieb braucht
+   Firefox eine Signierung durch Mozilla.
+
+Danach die Moodle-Seite einmal **neu laden** (F5), falls sie schon offen war.
+
+**Update:** denselben Ordner mit dem Inhalt der neuen ZIP überschreiben (Name nicht
+ändern) und in den Erweiterungseinstellungen auf „↺ neu laden" klicken.
 
 ---
 
