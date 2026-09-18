@@ -1,0 +1,246 @@
+/* Moodle Cloze Autofill v1.5 — Gelb, damit es sich von Grader (blau),
+   Reviewer (teal) und Notenstufen auf den ersten Blick unterscheidet.
+   Gelb trägt keine weiße Schrift: auf allen gelben Flächen steht dunkler Text. */
+
+.ca-hidden { display: none !important; }
+
+.ca-fab {
+  position: fixed;
+  top: 150px;
+  right: 20px;
+  z-index: 99998;
+  width: 46px;
+  height: 46px;
+  border: none;
+  border-radius: 50%;
+  background: #eab308;
+  color: #fff;
+  font-size: 20px;
+  line-height: 46px;
+  cursor: pointer;
+  box-shadow: 0 2px 10px rgba(0, 0, 0, .3);
+}
+.ca-fab:hover { background: #ca8a04; }
+.ca-fab { padding: 0; overflow: hidden; display: flex; align-items: center; justify-content: center; }
+.ca-fab .ca-fab-icon { width: 100%; height: 100%; object-fit: cover; display: block; }
+
+.ca-panel {
+  position: fixed;
+  top: 150px;
+  right: 76px;
+  z-index: 99999;
+  width: 430px;
+  max-height: calc(100vh - 180px);
+  display: flex;
+  flex-direction: column;
+  background: #fff;
+  border: 1px solid #cbd5e1;
+  border-radius: 10px;
+  box-shadow: 0 6px 24px rgba(0, 0, 0, .22);
+  font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+  font-size: 14px;
+  color: #1e293b;
+}
+
+.ca-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 14px;
+  background: #eab308;
+  color: #fff;
+  border-radius: 9px 9px 0 0;
+}
+.ca-title { font-weight: 600; }
+.ca-close {
+  background: none; border: none; color: #fff;
+  font-size: 16px; cursor: pointer; line-height: 1;
+}
+
+.ca-tabs { display: flex; border-bottom: 1px solid #e2e8f0; }
+.ca-tab {
+  flex: 1;
+  padding: 8px 6px;
+  border: none;
+  background: #f8fafc;
+  color: #475569;
+  font-size: 13px;
+  cursor: pointer;
+}
+.ca-tab.ca-aktiv { background: #fff; color: #eab308; font-weight: 600; box-shadow: inset 0 -2px 0 #eab308; }
+
+.ca-body { padding: 14px; overflow-y: auto; }
+
+.ca-meta { margin: 0 0 10px; font-size: 12px; color: #64748b; }
+
+.ca-hinweis {
+  margin: 0 0 10px;
+  font-size: 12px;
+  line-height: 1.5;
+  color: #475569;
+}
+
+/* Bedienelemente stehen IMMER unter ihrer Beschriftung, nie daneben. */
+.ca-label {
+  display: block;
+  font-size: 12px;
+  color: #475569;
+  margin-bottom: 12px;
+}
+.ca-check {
+  display: block;
+  font-size: 12px;
+  color: #475569;
+  margin-bottom: 8px;
+}
+
+.ca-json, .ca-prompt {
+  display: block;
+  width: 100%;
+  margin-top: 4px;
+  padding: 6px 8px;
+  border: 1px solid #cbd5e1;
+  border-radius: 6px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+  box-sizing: border-box;
+  resize: vertical;
+}
+
+.ca-go, .ca-copy, .ca-pruef, .ca-schreiben {
+  display: block;
+  width: 100%;
+  margin-bottom: 8px;
+  padding: 9px 12px;
+  border: none;
+  border-radius: 6px;
+  background: #eab308;
+  color: #fff;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.ca-go:hover, .ca-copy:hover, .ca-pruef:hover { background: #ca8a04; }
+.ca-go:disabled, .ca-pruef:disabled, .ca-schreiben:disabled { background: #cbd5e1; cursor: default; }
+
+.ca-zweit { background: #fff; color: #eab308; border: 1px solid #eab308; }
+.ca-zweit:hover { background: #fefce8; }
+
+/* Der Schreib-Knopf ist rot: er ist der einzige, der etwas veraendert. */
+.ca-schreiben { background: #b91c1c; }
+.ca-schreiben:hover { background: #991b1b; }
+
+.ca-progress {
+  height: 6px;
+  background: #fef3c7;
+  border-radius: 3px;
+  overflow: hidden;
+  margin-bottom: 6px;
+}
+.ca-bar { height: 100%; width: 0; background: #eab308; transition: width .2s; }
+.ca-ptext { font-size: 12px; color: #64748b; }
+
+.ca-groesse { margin: 4px 0 10px; font-size: 11px; color: #94a3b8; }
+
+.ca-error {
+  margin: 8px 0 0;
+  padding: 8px 10px;
+  background: #fef2f2;
+  border: 1px solid #fecaca;
+  border-radius: 6px;
+  font-size: 12px;
+  color: #991b1b;
+}
+
+.ca-ok {
+  margin: 8px 0 0;
+  padding: 8px 10px;
+  background: #f0fdf4;
+  border: 1px solid #bbf7d0;
+  border-radius: 6px;
+  font-size: 12px;
+  color: #166534;
+}
+
+.ca-list { margin-top: 10px; }
+
+.ca-frage {
+  margin-bottom: 10px;
+  padding: 8px 10px;
+  border: 1px solid #e2e8f0;
+  border-radius: 6px;
+  font-size: 12px;
+}
+.ca-frage h4 { margin: 0 0 6px; font-size: 12px; font-weight: 600; color: #1e293b; }
+
+.ca-diff { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11px; }
+.ca-plus { color: #166534; }
+.ca-warn { color: #b45309; }
+.ca-skip { color: #94a3b8; }
+
+.ca-log {
+  margin-top: 10px;
+  max-height: 220px;
+  overflow-y: auto;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11px;
+  line-height: 1.5;
+  color: #475569;
+}
+
+/* Versionsnummer im Kopf — die Standardprobe nach dem Neuladen. */
+.ca-ver {
+  font-weight: 400;
+  font-size: 12px;
+  opacity: .8;
+}
+
+
+/* ---- Lesbarkeit auf Gelb: dunkle Schrift statt weißer ---- */
+
+.ca-fab { color: #1f2937; }
+.ca-head { color: #1f2937; }
+.ca-close { color: #1f2937; }
+.ca-go, .ca-copy, .ca-pruef { color: #1f2937; }
+
+/* Der Schreib-Knopf bleibt rot mit weißer Schrift — er ist der einzige,
+   der etwas verändert, und soll sich absichtlich abheben. */
+.ca-schreiben { color: #fff; }
+
+/* Gelb auf Weiß ist als Schriftfarbe zu blass: dunkleres Bernstein nehmen. */
+.ca-tab.ca-aktiv { color: #a16207; }
+.ca-zweit { color: #a16207; border-color: #ca8a04; }
+
+/* Panel nur leicht getönt — voll gelb wäre der Protokolltext kaum zu lesen. */
+.ca-panel { background: #fffdf5; }
+.ca-tab { background: #fdf9e8; }
+.ca-tab.ca-aktiv { background: #fffdf5; }
+.ca-frage { background: #fff; }
+
+.ca-leise { color: #94a3b8; }
+
+/* Änderungen an vorhandenen Werten heben sich von Ergänzungen ab. */
+.ca-aend { color: #b45309; font-weight: 600; }
+
+/* Nach einem Lauf: die Seite ist veraltet und muss neu geladen werden. */
+.ca-neuladen {
+  display: block;
+  width: 100%;
+  margin-bottom: 8px;
+  padding: 9px 12px;
+  border: 2px solid #b45309;
+  border-radius: 6px;
+  background: #fff7ed;
+  color: #b45309;
+  font-size: 14px;
+  font-weight: 700;
+  cursor: pointer;
+}
+.ca-neuladen:hover { background: #ffedd5; }
+
+.ca-protokollkopf { color: #b45309; font-weight: 700; margin-bottom: 4px; }
+.ca-nichtladen { display: block; width: 100%; padding: 7px 12px; border-radius: 6px;
+                 font-size: 13px; cursor: pointer; margin-bottom: 8px; }
+
+/* Entfernungen heben sich von Ergänzungen (grün) und Änderungen (orange) ab. */
+.ca-entf { color: #b91c1c; font-weight: 600; }

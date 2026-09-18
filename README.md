@@ -1,7 +1,8 @@
-# Moodle-Erweiterungen für Chrome
+# Moodle-Erweiterungen für Chrome, Firefox und Edge
 
-Fünf kleine Chrome-Erweiterungen, die wiederkehrende Handarbeit in Moodle abnehmen —
-Bewerten, Nachbewerten, Fragensammlung pflegen, Notenstufen eintragen.
+Sechs kleine Browser-Erweiterungen, die wiederkehrende Handarbeit in Moodle abnehmen —
+Bewerten, Nachbewerten, Fragensammlung pflegen, Notenstufen eintragen. Alle sechs sind
+mit **WXT** aus **einer** Codebasis für Chrome, Firefox und Edge gebaut.
 
 Alle laufen **ausschließlich im Browser**. Keine Erweiterung schickt Daten an einen
 Server, keine hat einen eigenen KI-Zugang und keine braucht einen API-Schlüssel.
@@ -10,58 +11,61 @@ liest die **Antwort als JSON** wieder ein — welchen Chat du benutzt, entscheid
 
 ---
 
-## Die fünf Erweiterungen
+## Die sechs Erweiterungen
 
 | Erweiterung | Version | Download | Wofür |
 |---|---|---|---|
-| **Moodle AI Grader** · [Quelltext](moodle-ai-grader/) | 3.1.0 | **[⬇ ZIP](https://github.com/arfhh/moodle-chrome-erweiterungen/raw/main/dist/moodle-ai-grader.zip)** | **Klausuren** mit mehreren Aufgaben in einer Freitextfrage: legt Erwartungshorizont und Antwortvorlage in der Frage an, erzeugt Bewertungs-Prompts, rechnet die Punkte und trägt sie mit begründetem Feedback zurück |
-| **Moodle AI Reviewer** · [Quelltext](moodle-ai-reviewer/) | 1.5.9 | **[⬇ ZIP](https://github.com/arfhh/moodle-chrome-erweiterungen/raw/main/dist/moodle-ai-reviewer.zip)** | **Nachbewerten**: findet frei eingetippte Antworten (Cloze-Lücken, Kurzantwort, Numerisch), die Moodle nicht erkannt hat, und trägt Punkte und Feedback nach |
-| **Moodle AI Coach** · [Quelltext](moodle-ai-coach/) | 1.8.7 | **[⬇ ZIP](https://github.com/arfhh/moodle-chrome-erweiterungen/raw/main/dist/moodle-ai-coach.zip)** | **Kurze Freitextantworten** (2–3 Sätze): liest den Erwartungshorizont aus der Frage, bewertet und gibt Sprachfeedback |
-| **Moodle AI Aufgaben-Grader** · [Quelltext](moodle-ai-aufgaben-grader-wxt/) | 1.7.0 | **[⬇ ZIP](https://github.com/arfhh/moodle-chrome-erweiterungen/raw/main/dist/moodle-ai-aufgaben-grader.zip)** | **Datei-Abgaben** im Aufgabenmodul: lädt die Abgaben anonymisiert als ZIP, erkennt was seit dem letzten Mal neu oder geändert ist, und trägt Feedback und Punkte über Moodles Schnellbewertung zurück. Als einzige auch für **Firefox und Edge** gebaut |
-| **Moodle Cloze Autofill** · [Quelltext](moodle-cloze-autofill/) | 2.0.4 | **[⬇ ZIP](https://github.com/arfhh/moodle-chrome-erweiterungen/raw/main/dist/moodle-cloze-autofill.zip)** | **Fragensammlung pflegen**: trägt neue Antwortvarianten in Cloze-Lücken ein, statt Frage für Frage von Hand |
-| **Moodle Notenstufen Autofill** · [Quelltext](notenstufen-extension/) | 2.7.0 | **[⬇ ZIP](https://github.com/arfhh/moodle-chrome-erweiterungen/raw/main/dist/notenstufen-extension.zip)** | **Notenstufen-Tabelle** eines Kurses auf einen Klick ausfüllen |
+| **Moodle AI Grader** · [Quelltext](moodle-ai-grader-wxt/) | 3.1.0 | **[⬇ ZIP](https://github.com/arfhh/moodle-chrome-erweiterungen/raw/main/dist/moodle-ai-grader.zip)** | **Klausuren** mit mehreren Aufgaben in einer Freitextfrage: legt Erwartungshorizont und Antwortvorlage in der Frage an, erzeugt Bewertungs-Prompts, rechnet die Punkte und trägt sie mit begründetem Feedback zurück |
+| **Moodle AI Reviewer** · [Quelltext](moodle-ai-reviewer-wxt/) | 1.5.9 | **[⬇ ZIP](https://github.com/arfhh/moodle-chrome-erweiterungen/raw/main/dist/moodle-ai-reviewer.zip)** | **Nachbewerten**: findet frei eingetippte Antworten (Cloze-Lücken, Kurzantwort, Numerisch), die Moodle nicht erkannt hat, und trägt Punkte und Feedback nach |
+| **Moodle AI Coach** · [Quelltext](moodle-ai-coach-wxt/) | 1.8.11 | **[⬇ ZIP](https://github.com/arfhh/moodle-chrome-erweiterungen/raw/main/dist/moodle-ai-coach.zip)** | **Kurze Freitextantworten** (2–3 Sätze): liest den Erwartungshorizont aus der Frage, bewertet und gibt Sprachfeedback |
+| **Moodle AI Aufgaben-Grader** · [Quelltext](moodle-ai-aufgaben-grader-wxt/) | 1.7.0 | **[⬇ ZIP](https://github.com/arfhh/moodle-chrome-erweiterungen/raw/main/dist/moodle-ai-aufgaben-grader.zip)** | **Datei-Abgaben** im Aufgabenmodul: lädt die Abgaben anonymisiert als ZIP, erkennt was seit dem letzten Mal neu oder geändert ist, und trägt Feedback und Punkte über Moodles Schnellbewertung zurück |
+| **Moodle Cloze Autofill** · [Quelltext](moodle-cloze-autofill-wxt/) | 2.0.4 | **[⬇ ZIP](https://github.com/arfhh/moodle-chrome-erweiterungen/raw/main/dist/moodle-cloze-autofill.zip)** | **Fragensammlung pflegen**: trägt neue Antwortvarianten in Cloze-Lücken ein, statt Frage für Frage von Hand |
+| **Moodle Notenstufen Autofill** · [Quelltext](notenstufen-extension-wxt/) | 2.7.0 | **[⬇ ZIP](https://github.com/arfhh/moodle-chrome-erweiterungen/raw/main/dist/notenstufen-autofill.zip)** | **Notenstufen-Tabelle** eines Kurses auf einen Klick ausfüllen — pro Kurs oder für alle Kurse gemeinsam |
 
 Jeder Ordner hat eine eigene, ausführliche `README.md` — dort stehen Bedienung,
 Bewertungsmaßstab, Grenzen und die Änderungsgeschichte.
 
-> **Der Coach ist jung (1.6.0).** Der Bewertungsweg ist einmal vollständig mit
-> echten Daten gelaufen, das Zurückschreiben des Erwartungshorizonts in die Frage
-> aber noch nicht. Beim ersten Einsatz mit **einer** Frage anfangen.
+> **Der Coach ist jung (seit 1.8).** Der Bewertungsweg ist mehrfach mit echten Daten
+> gelaufen; beim ersten Einsatz in einem neuen Kurs trotzdem mit **einer** Frage anfangen.
 
 ---
 
 ## Installation
 
-Chrome kennt diese Erweiterungen nicht aus dem Web Store — sie werden als
-*entpackte Erweiterung* geladen. Das ist in drei Minuten erledigt:
+Keine dieser Erweiterungen liegt in einem Web Store — sie werden als *entpackte
+Erweiterung* geladen. Jedes ZIP enthält **drei fertige Ordner**, einen je Browser:
+`<name>-chrom`, `<name>-firefox`, `<name>-edge`.
 
 1. In der Tabelle oben auf **⬇ ZIP** der gewünschten Erweiterung klicken und das
    Archiv entpacken. Diese Links zeigen immer auf die **aktuelle Fassung** und ändern
    sich nie — man kann sie also weitergeben und in eigene Anleitungen schreiben.
    (Wer alles auf einmal will: **Code → Download ZIP** oben auf dieser Seite. Wer Git
-   benutzt: Repo klonen.)
-2. Den entpackten Ordner an einen festen Platz legen und **nicht mehr verschieben**.
-   Der Ordnername enthält bewusst keine Versionsnummer — so genügt bei einem Update
-   ein Klick auf „↺ neu laden“ statt einer Neuinstallation.
-3. In Chrome `chrome://extensions/` öffnen.
-4. Oben rechts den **Entwicklermodus** einschalten.
-5. **Entpackte Erweiterung laden** anklicken und den Ordner auswählen, in dem
-   `manifest.json` direkt liegt (also z. B. `moodle-ai-reviewer`, nicht den
-   übergeordneten Ordner).
+   benutzt: Repo klonen und den passenden `*-wxt`-Ordner verwenden.)
+2. Die drei Ordner an einen festen Platz legen und **nicht mehr verschieben**. Chrome
+   und Edge leiten aus dem Ordnerpfad die Erweiterungs-ID ab — wird der Ordner
+   verschoben oder umbenannt, sind gespeicherte Einstellungen weg.
 
-> **Der Aufgaben-Grader ist anders verpackt.** Sein ZIP enthält je einen fertigen
-> Ordner für Chrome, Firefox und Edge. Nimm für Chrome
-> `Erweiterung/moodle-ai-aufgaben-grader-chrom`. Der Ordnername ist Teil der
-> Kennung, unter der Chrome die gespeicherten Daten führt — wird er umbenannt
-> oder verschoben, sind Maßstab, Einstellungen und Kürzel-Karte weg.
+**Chrome / Edge:**
+1. `chrome://extensions` bzw. `edge://extensions` öffnen, **Entwicklermodus** einschalten.
+2. **Entpackte Erweiterung laden** → den passenden Ordner auswählen (`-chrom` für
+   Chrome, `-edge` für Edge).
+3. Beim Update genügt „↺ neu laden" an derselben Stelle, solange der Ordner am selben
+   Platz bleibt.
+
+**Firefox:**
+1. `about:debugging#/runtime/this-firefox` öffnen.
+2. **„Temporäres Add-on laden…"** klicken und eine Datei im `-firefox`-Ordner auswählen
+   (z. B. `manifest.json`).
+3. Gilt bis zum nächsten Firefox-Neustart — für Dauerbetrieb braucht Firefox eine
+   Signierung durch Mozilla oder den Entwicklermodus.
 
 Mehrere Erweiterungen lassen sich gleichzeitig laden; sie kommen sich nicht in die
-Quere. Grader und Reviewer liegen zwar auf derselben Moodle-Seite, zeigen ihr Panel
-aber unter verschiedenen Bedingungen und in verschiedenen Farben.
+Quere. Grader, Reviewer und Coach liegen zwar auf derselben Moodle-Seite, zeigen ihr
+Panel aber unter verschiedenen Bedingungen und in verschiedenen Farben.
 
 **Update:** denselben ⬇-Link noch einmal aufrufen, den alten Ordnerinhalt ersetzen, in
-`chrome://extensions/` auf „↺ neu laden“ klicken. Ob die neue Fassung wirklich aktiv
-ist, verrät die Versionsnummer auf der Kachel.
+den Erweiterungseinstellungen des jeweiligen Browsers auf „↺ neu laden" klicken. Ob die
+neue Fassung wirklich aktiv ist, verrät die Versionsnummer auf der Kachel.
 
 **Direktlinks zum Weitergeben** — sie führen immer zur neuesten Fassung:
 
@@ -75,11 +79,14 @@ https://github.com/arfhh/moodle-chrome-erweiterungen/raw/main/dist/moodle-ai-rev
 moodle-ai-coach
 https://github.com/arfhh/moodle-chrome-erweiterungen/raw/main/dist/moodle-ai-coach.zip
 
+moodle-ai-aufgaben-grader
+https://github.com/arfhh/moodle-chrome-erweiterungen/raw/main/dist/moodle-ai-aufgaben-grader.zip
+
 moodle-cloze-autofill
 https://github.com/arfhh/moodle-chrome-erweiterungen/raw/main/dist/moodle-cloze-autofill.zip
 
-notenstufen-extension
-https://github.com/arfhh/moodle-chrome-erweiterungen/raw/main/dist/notenstufen-extension.zip
+notenstufen-autofill
+https://github.com/arfhh/moodle-chrome-erweiterungen/raw/main/dist/notenstufen-autofill.zip
 ```
 
 ---
@@ -124,12 +131,15 @@ benutzen. Näheres in der README des Autofill.
 - Um die hinterlegten richtigen Antworten mitzulesen, braucht man das Recht,
   **Fragen zu bearbeiten**. Fehlt es, arbeiten die Erweiterungen ohne diese Angaben
   weiter, die KI beurteilt dann aber blind.
+- **Firefox verlangt für Dauerbetrieb eine Signierung durch Mozilla** oder den
+  Entwicklermodus. Ohne das gilt eine über „Temporäres Add-on laden" installierte
+  Fassung nur bis zum nächsten Firefox-Neustart.
 
 ---
 
 ## Versionsnummern
 
-Alle fünf Erweiterungen benutzen dieselbe dreistellige Form **`x.y.z`** — auch
+Alle sechs Erweiterungen benutzen dieselbe dreistellige Form **`x.y.z`** — auch
 dann, wenn die letzte Stelle 0 ist.
 
 | Stelle | Bedeutet | Beispiel |
@@ -138,23 +148,21 @@ dann, wenn die letzte Stelle 0 ist.
 | **y** | Neue Funktion oder spürbare Erweiterung im bestehenden Ablauf | 1.4.2 → 1.5.0 |
 | **z** | Laufende Anpassung: Fehlerbehebung, Feinschliff, Text, Symbol, Doku | 1.5.6 → 1.5.7 |
 
-Maßgeblich ist immer die `version` in der `manifest.json` der jeweiligen
-Erweiterung; die Tabelle oben und die READMEs werden danach nachgezogen. Grader,
-Reviewer und Coach zeigen ihre Versionsnummer außerdem in der Kopfzeile ihres
-Panels — direkt aus dem Manifest gelesen. Nach „↺ neu laden" ist damit ohne
-Umweg über `chrome://extensions/` sichtbar, welche Fassung wirklich läuft.
-
----
-
-## Mitmachen
-
-Fehler, Verbesserungen und Erfahrungen aus anderen Moodle-Installationen sind
-willkommen — am liebsten als Issue mit Moodle-Version, Theme und dem, was auf dem
-Bildschirm passiert ist (oder eben nicht).
+Maßgeblich ist immer die `version` in `wxt.config.ts` der jeweiligen Erweiterung
+(dort im Code, seit der WXT-Umstellung nicht mehr in einer separaten `manifest.json`)
+— die Tabelle oben und die READMEs werden danach nachgezogen. Grader, Reviewer und
+Coach zeigen ihre Versionsnummer außerdem in der Kopfzeile ihres Panels — direkt aus
+dem gebauten Manifest gelesen. Nach „↺ neu laden" ist damit ohne Umweg über die
+Erweiterungsverwaltung sichtbar, welche Fassung wirklich läuft.
 
 ---
 
 ## Womit diese Erweiterungen gebaut werden
+
+Alle sechs entstehen aus je einem eigenen **WXT**-Projekt (`*-wxt/`): eine
+JavaScript/CSS-Codebasis, aus der `npm run build-all` die drei Browserfassungen baut
+und `npm run paket` sie zusammen mit der README zu `dist/<name>.zip` packt — dieselbe
+ZIP, auf die die Download-Links oben zeigen.
 
 Die Claude-Skills hinter diesen Erweiterungen — und weitere für H5P und für
 Moodle-Testfragen — liegen in einem eigenen Repo:
@@ -163,9 +171,19 @@ zum Installieren oder als ZIP zum Selbsteinrichten.
 
 ---
 
+## Mitmachen
+
+Fehler, Verbesserungen und Erfahrungen aus anderen Moodle-Installationen sind
+willkommen — am liebsten als Issue mit Moodle-Version, Browser, Theme und dem, was auf
+dem Bildschirm passiert ist (oder eben nicht).
+
+---
+
 ## Lizenz und Urheber
 
 **CC BY-SA 4.0** — Weitergabe und Bearbeitung erlaubt, mit Namensnennung, und unter
 denselben Bedingungen. Siehe [LICENSE](LICENSE).
 
-Entwickelt von **A. Spielhoff** und **T. Henken** für den eigenen Unterricht.
+Entwickelt von **A. Spielhoff** für den eigenen Unterricht — den **Moodle AI Grader**
+zusammen mit **T. Henken**. Bei ihm müssen beide Namen genannt bleiben, wer ihn
+weiterverbreitet oder bearbeitet.
