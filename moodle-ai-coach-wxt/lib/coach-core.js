@@ -131,10 +131,8 @@ export function starteCoach() {
       // Fehlerstufe, sonst nutzt er sich ab. Direkt hinter der Sprachzeile, mit der
       // die Stufe erreicht wurde.
       if (kopf === letzteSprachzeile && hoechsteStufe) {
-        html += '<p>Das sind mehrere grundlegende Fehler in einem einzigen Satz, nicht nur '
-          + 'Kleinigkeiten — das ist auf unserer Skala die höchste Fehlerstufe. Bis zum '
-          + 'Abitur in zwei bis drei Jahren musst du das sicher beherrschen. Arbeite gezielt '
-          + 'daran.</p>';
+        html += '<p>In deiner Antwort häufen sich mehrere grundlegende Fehler — das ist die '
+          + 'höchste Fehlerstufe. Es lohnt sich, gezielt daran zu arbeiten.</p>';
       }
     });
     return html;

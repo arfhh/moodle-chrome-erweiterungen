@@ -207,6 +207,24 @@ Befehle: `npm run dev` (Chrome-Testlauf), `npm run build-all` (alle drei Browser
 `npm run paket` (baut, benennt um, packt zu `dist/moodle-ai-coach.zip`). Details in
 `1-browser-wxt`.
 
+## Stand 1.8.11
+
+**1.8.11** — **Hinweissatz bei höchster Fehlerstufe überarbeitet — kein Abitur-Bezug
+  mehr, kein Verweis auf „einen einzigen Satz".** Auslöser (Arne, 18.09.2026):
+  - Der alte Satz behauptete „mehrere grundlegende Fehler in einem einzigen Satz" —
+    das ist fachlich falsch: `gewicht` wird über die gesamte Fehlerliste der Antwort
+    berechnet (`fehlerGewicht()`), nicht satzweise, und die Coach-Antworten sind
+    ohnehin nur 2–3 Sätze lang.
+  - Der Satz „Bis zum Abitur in zwei bis drei Jahren musst du das sicher beherrschen"
+    war übergriffig (unterstellt einen persönlichen Zeithorizont) und stimmt nicht für
+    alle SuS — nicht jede*r macht in 2–3 Jahren Abitur.
+  - Neuer, plugin-fester Satz: „In deiner Antwort häufen sich mehrere grundlegende
+    Fehler — das ist die höchste Fehlerstufe. Es lohnt sich, gezielt daran zu
+    arbeiten." Bezieht sich auf die ganze Antwort statt auf einen Satz, ohne
+    Zukunftsprognose, ohne Skalen-Jargon.
+  - Nur der feste Satz in `rueckmeldungHtml()` geändert, keine Prompt-Änderung,
+    keine Rechenlogik betroffen.
+
 ## Stand 1.8.10
 
 **1.8.10** — **Knopf „Alle eintragen" wird zu „Erneut versuchen", solange etwas offen
