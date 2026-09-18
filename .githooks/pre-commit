@@ -1,0 +1,43 @@
+#!/bin/bash
+# Baut die ZIPs betroffener Erweiterungen automatisch neu, bevor ein Commit
+# durchgeht — damit dist/*.zip nie hinter dem committeten Quelltext zurueckbleibt.
+#
+# Aktiv, weil in diesem Repo einmalig gesetzt wurde:
+#   git config core.hooksPath .githooks
+# (siehe Haupt-README, Abschnitt "Womit diese Erweiterungen gebaut werden")
+set -e
+cd "$(git rev-parse --show-toplevel)"
+
+PROJECTS="moodle-ai-grader-wxt moodle-ai-reviewer-wxt moodle-ai-coach-wxt moodle-ai-aufgaben-grader-wxt moodle-cloze-autofill-wxt notenstufen-extension-wxt"
+
+STAGED="$(git diff --cached --name-only --diff-filter=ACMR)"
+REBUILT=""
+
+for p in $PROJECTS; do
+  # Betrifft der Commit Quelltext dieser Erweiterung? (README zaehlt mit, sie
+  # wandert mit ins Zip; Erweiterung/ und node_modules/ sind gitignored und
+  # koennen deshalb ohnehin nie in $STAGED auftauchen.)
+  if echo "$STAGED" | grep -q "^$p/"; then
+    if [ ! -d "$p/node_modules" ]; then
+      echo "Warnung: $p/node_modules fehlt — ZIP wird NICHT automatisch aktualisiert (erst 'npm install' in $p nachholen)." >&2
+      continue
+    fi
+    echo "→ $p geaendert, baue ZIP neu…"
+    LOG="$(mktemp)"
+    if ! (cd "$p" && npm run paket) >"$LOG" 2>&1; then
+      echo "✗ Bauen von $p fehlgeschlagen — Commit abgebrochen:" >&2
+      cat "$LOG" >&2
+      rm -f "$LOG"
+      exit 1
+    fi
+    rm -f "$LOG"
+    REBUILT="$REBUILT $p"
+  fi
+done
+
+# Frisch gebaute ZIPs mit in denselben Commit aufnehmen, statt einen zweiten
+# Commit noetig zu machen.
+if [ -n "$REBUILT" ]; then
+  git add dist/*.zip
+  echo "✓ ZIP(s) aktualisiert und mit eingecheckt fuer:$REBUILT"
+fi

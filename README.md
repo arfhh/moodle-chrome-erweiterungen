@@ -162,7 +162,29 @@ Erweiterungsverwaltung sichtbar, welche Fassung wirklich läuft.
 Alle sechs entstehen aus je einem eigenen **WXT**-Projekt (`*-wxt/`): eine
 JavaScript/CSS-Codebasis, aus der `npm run build-all` die drei Browserfassungen baut
 und `npm run paket` sie zusammen mit der README zu `dist/<name>.zip` packt — dieselbe
-ZIP, auf die die Download-Links oben zeigen.
+ZIP, auf die die Download-Links oben zeigen. Der Ordner **im** Zip heißt nach der
+Erweiterung selbst (`<name>-Erweiterung`), nicht schlicht „Erweiterung" — sonst würde
+beim Entpacken mehrerer ZIPs nacheinander „Erweiterung", „Erweiterung (1)",
+„Erweiterung (2)" … entstehen.
+
+**Die ZIPs bauen sich beim Commit von selbst neu.** Ein Git-Hook
+(`.githooks/pre-commit`) prüft bei jedem `git commit`, ob Quelltext einer der sechs
+`*-wxt`-Projekte mit eingecheckt wird, baut in dem Fall automatisch `npm run paket`
+für genau dieses Projekt und nimmt die frische `dist/<name>.zip` gleich mit in denselben
+Commit auf. Damit ist ausgeschlossen, dass eine ZIP im Download hinter dem
+Quelltext zurückbleibt, weil das manuelle `npm run paket` vergessen wurde.
+
+Der Hook ist **einmalig pro Arbeitskopie** einzurichten (danach merkt Git sich das
+dauerhaft in `.git/config`):
+
+```
+git config core.hooksPath .githooks
+```
+
+Fehlt in einem der sechs Projekte `node_modules/` (z. B. nach einem frischen Klonen
+ohne `npm install`), überspringt der Hook diese Erweiterung mit einer Warnung, statt
+den Commit zu blockieren — dann `npm install` in dem Ordner nachholen und den Commit
+notfalls wiederholen.
 
 Die Claude-Skills hinter diesen Erweiterungen — und weitere für H5P und für
 Moodle-Testfragen — liegen in einem eigenen Repo:

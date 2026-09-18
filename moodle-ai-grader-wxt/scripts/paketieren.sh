@@ -21,12 +21,16 @@ cp "README.md" "$OUT/README.md"
 
 # zip kann nicht immer in einen gemounteten Ordner schreiben (Temp-Datei + Umbenennen);
 # deshalb ausserhalb bauen und hineinkopieren.
-WORK="${TMPDIR:-/tmp}/zipwork.$$"; rm -rf "$WORK"; mkdir -p "$WORK/staging/$OUT" "$WORK/out"
+# Der Ordner IM Zip heisst NICHT "Erweiterung", sondern "$NAME-Erweiterung": beim
+# Entpacken mehrerer ZIPs nebeneinander sonst "Erweiterung", "Erweiterung (1)", ... —
+# mit dem Namen der Erweiterung im Ordnernamen bleibt jede eindeutig.
+ZIPROOT="$NAME-Erweiterung"
+WORK="${TMPDIR:-/tmp}/zipwork.$$"; rm -rf "$WORK"; mkdir -p "$WORK/staging/$ZIPROOT" "$WORK/out"
 (cd "$OUT" && find . \( -name '.DS_Store' -o -name '*.bak' \) -prune -o -type f -print) \
   | sed 's|^\./||' | while read -r f; do
-      mkdir -p "$WORK/staging/$OUT/$(dirname "$f")"; cp "$OUT/$f" "$WORK/staging/$OUT/$f"
+      mkdir -p "$WORK/staging/$ZIPROOT/$(dirname "$f")"; cp "$OUT/$f" "$WORK/staging/$ZIPROOT/$f"
     done
-(cd "$WORK/staging" && zip -q -r -X "$WORK/out/$NAME.zip" "$OUT")
+(cd "$WORK/staging" && zip -q -r -X "$WORK/out/$NAME.zip" "$ZIPROOT")
 REPO_ROOT="$(cd "$DIR/.." && pwd)"
 mkdir -p "$REPO_ROOT/dist"
 cp "$WORK/out/$NAME.zip" "$REPO_ROOT/dist/$NAME.zip"
