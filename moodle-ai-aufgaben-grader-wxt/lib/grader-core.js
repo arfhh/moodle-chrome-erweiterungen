@@ -542,14 +542,14 @@ export function starteGrader() {
   }
 
   // teilnehmer: [{userid, name}]. Rückgabe: { userid: { kuerzel, name } }.
-  // Basis-Kürzel sind die Initialen (Vorname+Nachname). Kommen dieselben
-  // Initialen in der übergebenen Liste mehrfach vor, bekommt in dieser
-  // Gruppe jede Person einen Bindestrich-Zusatz: eine aus dem vollen Namen
-  // gehashte zweistellige Zahl (00–99). Kollidiert der Hash zweier Namen in
-  // derselben Gruppe (selten), rückt — in fester alphabetischer Reihenfolge,
-  // nicht nach Download-Reihenfolge — die spätere Person zur nächstfreien
-  // Zahl auf. Ohne Kollision bleibt es beim reinen Initialen-Kürzel, ganz
-  // ohne Zusatz.
+  // Kürzel = Initialen (Vorname+Nachname) + Bindestrich + eine aus dem vollen
+  // Namen gehashte zweistellige Zahl (00–99) — IMMER, auch wenn die
+  // Initialen gerade eindeutig sind. Sonst würde ein später hinzukommender
+  // zweiter KM dem ersten KM nachträglich einen Zusatz aufzwingen und damit
+  // dessen bis dahin zusatzlose Kürzel ändern (Arne, 18.09.2026). Kollidiert
+  // der Hash zweier Namen mit denselben Initialen (selten), rückt — in
+  // fester alphabetischer Reihenfolge, nicht nach Download-Reihenfolge —
+  // die spätere Person zur nächstfreien Zahl auf.
   function kuerzelBerechnen(teilnehmer, melden) {
     const gruppen = {};
     teilnehmer.forEach((t) => {
@@ -557,27 +557,28 @@ export function starteGrader() {
       (gruppen[base] = gruppen[base] || []).push(t);
     });
     const karte = {};
-    const aufgeloest = [];
+    const kollisionen = [];
     Object.keys(gruppen).forEach((base) => {
-      const gruppe = gruppen[base];
-      if (gruppe.length === 1) {
-        karte[gruppe[0].userid] = { kuerzel: base, name: gruppe[0].name };
-        return;
-      }
       const belegt = new Set();
-      gruppe
+      gruppen[base]
         .slice()
         .sort((a, b) => a.name.localeCompare(b.name, 'de'))
         .forEach((t) => {
-          let nr = namensHash(t.name);
+          const natuerlich = namensHash(t.name);
+          let nr = natuerlich;
           while (belegt.has(nr)) nr = (nr + 1) % 100;
           belegt.add(nr);
           karte[t.userid] = { kuerzel: base + '-' + String(nr).padStart(2, '0'), name: t.name };
+          // Nur eine ECHTE Hash-Kollision ist meldenswert — zwei verschiedene
+          // Namen mit denselben Initialen, deren berechnete Zahl zufällig
+          // gleich war. Das ist selten genug, dass es im Log auffallen soll.
+          if (nr !== natuerlich) {
+            kollisionen.push(`${t.name} → ${karte[t.userid].kuerzel} (Zahl war durch ${base}-${String(natuerlich).padStart(2, '0')} schon belegt)`);
+          }
         });
-      aufgeloest.push(`${base}: ${gruppe.map((t) => karte[t.userid].kuerzel).join(', ')}`);
     });
-    if (melden && aufgeloest.length) {
-      melden(`Gleiche Initialen in dieser Klasse — mit Zusatz unterschieden: ${aufgeloest.join(' · ')}`, 'ok');
+    if (melden && kollisionen.length) {
+      melden(`Seltene Hash-Kollision aufgelöst: ${kollisionen.join(' · ')}`, 'ok');
     }
     return karte;
   }
@@ -1018,7 +1019,7 @@ export function starteGrader() {
       <textarea id="abg-ki-text" rows="2"></textarea>
       <div class="abg-hinweis">Wird beim Eintragen angehängt, nicht von der KI geschrieben. Leeres Feld stellt den Standardsatz wieder her. Ist das Feedback als HTML geschrieben, wird der Hinweis klein und grau angehängt, sonst als Klartext.</div>
       <label>Kürzel-IDs</label>
-      <div class="abg-hinweis">Werden automatisch aus den Klarnamen gebildet (Vorname- und Nachname-Initiale, z. B. „KM“). Nur wenn dieselben Initialen mehrfach in der Klasse vorkommen, bekommt jede Person zusätzlich eine aus dem Namen berechnete Zahl (z. B. „KM-42“). Rein aus dem Namen berechnet — es gibt nichts zu sichern oder einzulesen, und dieselbe Person bekommt bei jedem Lauf wieder dasselbe Kürzel.</div>
+      <div class="abg-hinweis">Werden automatisch aus den Klarnamen gebildet: Vorname- und Nachname-Initiale plus eine aus dem vollen Namen berechnete Zahl (z. B. „KM-42“) — immer, auch wenn die Initialen gerade eindeutig sind. So ändert sich das Kürzel nicht mehr nachträglich, wenn später ein zweiter KM in die Klasse kommt. Rein aus dem Namen berechnet — es gibt nichts zu sichern oder einzulesen.</div>
       <button class="abg-sekundaer" id="abg-reset">Stand dieser Aufgabe zurücksetzen</button>
       <div class="abg-hinweis">Zurücksetzen vergisst, was beim letzten Lauf schon geladen war — der nächste Durchlauf holt dann wieder alles. Nötig, wenn der Output-Ordner verloren gegangen ist.</div>
       <button class="abg-sekundaer" id="abg-einst-speichern">Einstellungen speichern</button>

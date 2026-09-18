@@ -55,18 +55,18 @@ Bewertungsregeln gelten, steht in der jeweiligen Projekt-Skill der Lehrkraft.
 
 ## Kürzel-ID-Schema
 
-Anfangsbuchstabe Vorname + Anfangsbuchstabe Nachname, z. B. `MB`. Kommen dieselben
-Initialen in derselben Klasse mehrfach vor, bekommt jede betroffene Person zusätzlich
-einen Bindestrich-Zusatz: eine zweistellige Zahl, die die Erweiterung deterministisch
-aus dem vollen Klarnamen berechnet (z. B. `MB-42`). Ohne Kollision bleibt es beim
-reinen Initialen-Kürzel.
+Anfangsbuchstabe Vorname + Anfangsbuchstabe Nachname + Bindestrich + eine zweistellige
+Zahl, die die Erweiterung deterministisch aus dem vollen Klarnamen berechnet, z. B.
+`MB-42`. Die Zahl steht **immer** dabei, auch wenn die Initialen gerade eindeutig sind
+— sonst würde ein später hinzukommender zweiter `MB` dem ersten nachträglich einen
+Zusatz aufzwingen und dessen bis dahin zusatzloses Kürzel ändern.
 
-Seit v1.8.0 wird das Kürzel **bei jedem Lauf frisch aus den Klarnamen berechnet** —
+Seit v1.8.0 wird das Kürzel **bei jedem Lauf frisch aus dem Klarnamen berechnet** —
 es wird nichts mehr gespeichert, gesichert oder eingelesen. Dieselbe Person bekommt
 dadurch immer wieder dasselbe Kürzel, unabhängig davon, wie die Klasse sonst wächst,
-schrumpft oder ob die Karte je nach Rechner unterschiedlich war (vorher: eine je Kurs
-in `chrome.storage.local` gespeicherte, fortlaufend nummerierte Karte — ihr Zähler
-verschob sich, sobald sich die Klasse veränderte).
+schrumpft oder wer sie sonst verlässt (vorher: eine je Kurs in `chrome.storage.local`
+gespeicherte, fortlaufend nummerierte Karte — ihr Zähler verschob sich, sobald sich
+die Klasse veränderte).
 
 ---
 
