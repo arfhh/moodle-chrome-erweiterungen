@@ -2,7 +2,7 @@
 
 **Lädt Datei-Abgaben aus dem Aufgaben-Modul anonymisiert herunter, erzeugt den Auftrags-Prompt für die KI-Bewertung und trägt Note + Feedback automatisch zurück.**
 
-Version 1.5.0 · Lizenz: CC BY-SA 4.0
+Version 1.8.0 · Lizenz: CC BY-SA 4.0
 
 > Anders als die übrigen Erweiterungen dieser Familie (Grader, Reviewer, Coach — alle für
 > Testfragen) bewertet der Abgabengrader **Datei-Abgaben** im Aufgaben-Modul (`mod/assign`):
@@ -55,13 +55,18 @@ Bewertungsregeln gelten, steht in der jeweiligen Projekt-Skill der Lehrkraft.
 
 ## Kürzel-ID-Schema
 
-Anfangsbuchstabe Vorname + Anfangsbuchstabe Nachname + fortlaufende Nummer, z. B.
-`MB-03`. Die Nummer ist **pro Kurs** eindeutig und bleibt über mehrere Aufgaben
-derselben Klasse hinweg stabil — ein einmal vergebenes Kürzel ändert sich nicht mehr.
-Zwei Personen mit gleichen Initialen unterscheiden sich allein über die Nummer.
+Anfangsbuchstabe Vorname + Anfangsbuchstabe Nachname, z. B. `MB`. Kommen dieselben
+Initialen in derselben Klasse mehrfach vor, bekommt jede betroffene Person zusätzlich
+einen Bindestrich-Zusatz: eine zweistellige Zahl, die die Erweiterung deterministisch
+aus dem vollen Klarnamen berechnet (z. B. `MB-42`). Ohne Kollision bleibt es beim
+reinen Initialen-Kürzel.
 
-Die Zuordnung Kürzel-ID ↔ Moodle-Nutzer bleibt ausschließlich lokal im Browser
-(`chrome.storage.local`) und verlässt ihn nie.
+Seit v1.8.0 wird das Kürzel **bei jedem Lauf frisch aus den Klarnamen berechnet** —
+es wird nichts mehr gespeichert, gesichert oder eingelesen. Dieselbe Person bekommt
+dadurch immer wieder dasselbe Kürzel, unabhängig davon, wie die Klasse sonst wächst,
+schrumpft oder ob die Karte je nach Rechner unterschiedlich war (vorher: eine je Kurs
+in `chrome.storage.local` gespeicherte, fortlaufend nummerierte Karte — ihr Zähler
+verschob sich, sobald sich die Klasse veränderte).
 
 ---
 
