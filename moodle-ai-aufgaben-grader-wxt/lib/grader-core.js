@@ -1443,7 +1443,6 @@ export function starteGrader() {
     const stufe = lauf.laufart === 'abschluss'
       ? 'Abschlussfeedback MIT Note'
       : 'Zwischenfeedback OHNE Note';
-    ortZeilen(z, einst);
     const z = [];
     z.push('Aufgaben-Bewertung starten.');
     z.push('');
@@ -1455,6 +1454,10 @@ export function starteGrader() {
     if (lauf.abgleich) z.push(`Abgleich: ${lauf.abgleich.neu} neu, ${lauf.abgleich.geaendert} geändert, ${lauf.abgleich.unveraendert} unverändert`);
     if (lauf.modus === 'schnell') z.push('Hinweis:  Unveränderte Dateien liegen nicht im ZIP (Schnelldurchlauf).');
     z.push('');
+    // Bug behoben (Arne, 19.09.2026): stand vorher VOR "const z = []" — das
+    // liess jeden Download mit "Cannot access 'z' before initialization"
+    // abbrechen, sobald diese Funktion aufgerufen wurde (seit c19b4a7).
+    ortZeilen(z, einst);
     z.push('Ablauf:');
     let n = 1;
     z.push(`${n++}. "${lauf.ordner}/_lauf.json" lesen — Aufgabe, Lauf-Art, Kürzel-IDs und je Datei ein Feld "status" (neu, geaendert, unveraendert).`);
